@@ -42,7 +42,8 @@ class GreetingScreenshotTest {
                 ttftMs = 110L,
                 ttsLatencyMs = 145L,
                 totalLatencyMs = 430L,
-                targetMet = true
+                targetMet = true,
+                isReal = true
               )
             )
             AudioOrbVisualizer(

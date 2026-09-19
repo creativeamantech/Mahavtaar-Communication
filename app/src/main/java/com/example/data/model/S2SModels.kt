@@ -73,11 +73,49 @@ data class LatencyMetrics(
     val ttftMs: Long = 0L, // Time to First Token
     val ttsLatencyMs: Long = 0L, // Time to First Audio Playback
     val totalLatencyMs: Long = 0L,
-    val targetMet: Boolean = true // target < 800ms
+    val targetMet: Boolean = true, // target < 800ms
+    val isReal: Boolean = false // True if calculated from actual measured timestamps of an execution turn
 ) {
     companion object {
         const val LATENCY_TARGET_MS = 800L
     }
+}
+
+/**
+ * Diagnostics and runtime telemetry info.
+ */
+data class DiagnosticsInfo(
+    val sttModelName: String = "None",
+    val sttStatus: String = "Not Loaded",
+    val sttLoadTimeMs: Long = 0L,
+    val llmModelName: String = "None",
+    val llmStatus: String = "Not Loaded",
+    val llmLoadTimeMs: Long = 0L,
+    val llmTtftMs: Long = 0L,
+    val llmTokensPerSec: Float = 0f,
+    val ttsModelName: String = "None",
+    val ttsStatus: String = "Not Loaded",
+    val ttsLoadTimeMs: Long = 0L,
+    val ttsSampleRate: Int = 16000,
+    val audioTransport: String = "Local AudioRecord/AudioTrack (16kHz PCM)",
+    val totalDeviceRamMb: Int = 0,
+    val availDeviceRamMb: Int = 0,
+    val cpuArch: String = "arm64-v8a",
+    val availableStorageMb: Int = 0
+)
+
+/**
+ * Status summary for active pipeline models.
+ */
+data class ModelStatusSummary(
+    val sttLoaded: Boolean = false,
+    val sttModelName: String = "None",
+    val llmLoaded: Boolean = false,
+    val llmModelName: String = "None",
+    val ttsLoaded: Boolean = false,
+    val ttsModelName: String = "None"
+) {
+    val allLoaded: Boolean get() = sttLoaded && llmLoaded && ttsLoaded
 }
 
 /**
@@ -90,6 +128,7 @@ sealed interface S2SEvent {
     data class AssistantDelta(val deltaText: String, val fullText: String, val isFinished: Boolean) : S2SEvent
     data class Metrics(val metrics: LatencyMetrics) : S2SEvent
     data class SpeakingState(val isSpeaking: Boolean) : S2SEvent
+    data class ModelStatusChanged(val summary: ModelStatusSummary) : S2SEvent
     data class Error(val message: String, val cause: Throwable? = null) : S2SEvent
 }
 

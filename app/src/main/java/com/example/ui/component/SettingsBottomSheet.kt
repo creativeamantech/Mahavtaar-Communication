@@ -15,10 +15,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
-import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -129,7 +129,7 @@ fun SettingsBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             Spacer(modifier = Modifier.height(16.dp))
 
             // Section 2: LLM Model Selection
@@ -160,7 +160,7 @@ fun SettingsBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             Spacer(modifier = Modifier.height(16.dp))
 
             // Section 3: TTS Model Selection
@@ -191,7 +191,7 @@ fun SettingsBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            Divider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             Spacer(modifier = Modifier.height(16.dp))
 
             // Section 4: Pipeline Behavior & VAD

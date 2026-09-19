@@ -85,7 +85,8 @@ fun MetricsHudCard(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
                         .background(
-                            if (metrics.targetMet) S2SElectricMint.copy(alpha = 0.15f)
+                            if (!metrics.isReal) MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+                            else if (metrics.targetMet) S2SElectricMint.copy(alpha = 0.15f)
                             else Color(0xFFF59E0B).copy(alpha = 0.15f)
                         )
                         .padding(horizontal = 8.dp, vertical = 3.dp)
@@ -95,14 +96,22 @@ fun MetricsHudCard(
                             modifier = Modifier
                                 .size(6.dp)
                                 .clip(CircleShape)
-                                .background(if (metrics.targetMet) S2SElectricMint else Color(0xFFF59E0B))
+                                .background(
+                                    if (!metrics.isReal) MaterialTheme.colorScheme.onSurfaceVariant
+                                    else if (metrics.targetMet) S2SElectricMint
+                                    else Color(0xFFF59E0B)
+                                )
                         )
                         Spacer(modifier = Modifier.width(5.dp))
                         Text(
-                            text = if (metrics.targetMet) "< 800ms TARGET MET" else "800ms TARGET",
+                            text = if (!metrics.isReal) "REAL TELEMETRY READY"
+                            else if (metrics.targetMet) "< 800ms TARGET MET"
+                            else "${metrics.totalLatencyMs}ms ROUNDTRIP",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (metrics.targetMet) S2SElectricMint else Color(0xFFF59E0B)
+                            color = if (!metrics.isReal) MaterialTheme.colorScheme.onSurfaceVariant
+                            else if (metrics.targetMet) S2SElectricMint
+                            else Color(0xFFF59E0B)
                         )
                     }
                 }
@@ -117,23 +126,23 @@ fun MetricsHudCard(
             ) {
                 MetricItem(
                     label = "STT Latency",
-                    value = "${metrics.sttLatencyMs}ms",
+                    value = if (metrics.isReal) "${metrics.sttLatencyMs}ms" else "--",
                     color = S2SCyanLight
                 )
                 MetricItem(
                     label = "TTFT (LLM)",
-                    value = "${metrics.ttftMs}ms",
+                    value = if (metrics.isReal) "${metrics.ttftMs}ms" else "--",
                     color = S2SVioletAccent
                 )
                 MetricItem(
                     label = "TTS Synthesize",
-                    value = "${metrics.ttsLatencyMs}ms",
+                    value = if (metrics.isReal) "${metrics.ttsLatencyMs}ms" else "--",
                     color = S2SIndigoSecondary
                 )
                 MetricItem(
                     label = "Total Turn",
-                    value = "${metrics.totalLatencyMs}ms",
-                    color = if (metrics.targetMet) S2SElectricMint else Color(0xFFF59E0B),
+                    value = if (metrics.isReal) "${metrics.totalLatencyMs}ms" else "--",
+                    color = if (metrics.isReal && metrics.targetMet) S2SElectricMint else if (metrics.isReal) Color(0xFFF59E0B) else MaterialTheme.colorScheme.onSurfaceVariant,
                     isBold = true
                 )
             }
