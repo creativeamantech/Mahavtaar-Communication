@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Center Orb Glow Outer -->
+    <path
+        android:fillColor="#3038BDF8"
+        android:pathData="M54,54m-28,0a28,28 0,1 1,56 0a28,28 0,1 1,-56 0" />
+
+    <!-- Center Orb Glow Inner -->
+    <path
+        android:fillColor="#506366F1"
+        android:pathData="M54,54m-20,0a20,20 0,1 1,40 0a20,20 0,1 1,-40 0" />
+
+    <!-- Core Audio Waveform Bars (Microphone / Spectrum) -->
+    <!-- Bar 1 (Left outer) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M38,50 L38,58 A2,2 0 0,1 34,58 L34,50 A2,2 0 0,1 38,50 Z" />
+
+    <!-- Bar 2 (Mid left) -->
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M46,42 L46,66 A2,2 0 0,1 42,66 L42,42 A2,2 0 0,1 46,42 Z" />
+
+    <!-- Bar 3 (Center high) -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,36 L56,72 A2,2 0 0,1 52,72 L52,36 A2,2 0 0,1 56,36 Z" />
+
+    <!-- Bar 4 (Mid right) -->
+    <path
+        android:fillColor="#818CF8"
+        android:pathData="M66,42 L66,66 A2,2 0 0,1 62,66 L62,42 A2,2 0 0,1 66,42 Z" />
+
+    <!-- Bar 5 (Right outer) -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M74,50 L74,58 A2,2 0 0,1 70,58 L70,50 A2,2 0 0,1 74,50 Z" />
+
+    <!-- Sonic Wave Rings Accent -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#67E8F9"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M27,45 A30,30 0 0,0 27,63" />
+
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#67E8F9"
+        android:strokeWidth="1.8"
+        android:strokeLineCap="round"
+        android:pathData="M81,45 A30,30 0 0,1 81,63" />
+</vector>
