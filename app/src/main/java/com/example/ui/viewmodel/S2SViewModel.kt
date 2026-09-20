@@ -500,10 +500,6 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
         downloadManager.cancelDownload(modelId)
     }
 
-    fun downloadAllRecommendedModels() {
-        downloadManager.enqueueAllRecommendedModels()
-    }
-
     fun deleteModel(modelId: String) {
         unloadModel(modelId)
         downloadManager.deleteModel(modelId)
@@ -519,15 +515,12 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
         refreshStorage()
     }
 
-    fun installBundledModel(modelId: String) {
-        val success = downloadManager.installBundledModel(modelId)
-        if (!success) {
-            downloadManager.startDownload(modelId)
-        }
+    fun downloadModel(modelId: String) {
+        downloadManager.startDownload(modelId)
         refreshStorage()
     }
 
-    fun installAllRecommendedModels() {
+    fun downloadAllRecommendedModels() {
         downloadManager.enqueueAllRecommendedModels()
         refreshStorage()
         _uiState.update { it.copy(showModelManagerSheet = true) }

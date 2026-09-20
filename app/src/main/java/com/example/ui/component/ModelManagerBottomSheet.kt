@@ -92,7 +92,6 @@ fun ModelManagerBottomSheet(
     onCancelDownload: (String) -> Unit,
     onDeleteModel: (String) -> Unit,
     onDeleteAllModels: () -> Unit,
-    onInstallBundledPack: () -> Unit,
     onDownloadAllRecommended: () -> Unit = {},
     onTestModel: (String) -> Unit = {},
     testStatusMessage: String? = null,
@@ -202,7 +201,6 @@ fun ModelManagerBottomSheet(
                 summary = modelStatusSummary,
                 onLoadAll = onLoadAll,
                 onUnloadAll = onUnloadAll,
-                onInstallBundledPack = onInstallBundledPack,
                 onDownloadAllRecommended = onDownloadAllRecommended
             )
 
@@ -312,7 +310,6 @@ private fun ModelControlPanelCard(
     summary: ModelStatusSummary,
     onLoadAll: () -> Unit,
     onUnloadAll: () -> Unit,
-    onInstallBundledPack: () -> Unit,
     onDownloadAllRecommended: () -> Unit
 ) {
     Card(
@@ -367,26 +364,16 @@ private fun ModelControlPanelCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Button(
                     onClick = onDownloadAllRecommended,
-                    modifier = Modifier.weight(1f).testTag("download_all_recommended_button"),
+                    modifier = Modifier.fillMaxWidth().testTag("download_all_recommended_button"),
                     colors = ButtonDefaults.buttonColors(containerColor = S2SVioletAccent)
                 ) {
                     Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Download Recommended", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
-
-                OutlinedButton(
-                    onClick = onInstallBundledPack,
-                    modifier = Modifier.weight(1f).testTag("install_bundled_pack_button")
-                ) {
-                    Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Offline Pack", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Download Recommended Pack (STT + LLM + TTS)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }

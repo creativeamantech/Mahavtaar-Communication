@@ -512,6 +512,25 @@ class ModelDownloadManager(
                 }
                 return
             }
+
+            // Cryptographic checksum verification for companion asset
+            if (assetPartFile.exists() && asset.checksumSha256.isNotBlank()) {
+                val computedAssetSha = computeSha256(assetPartFile)
+                if (!computedAssetSha.equals(asset.checksumSha256.trim(), ignoreCase = true)) {
+                    Log.e(TAG, "[TTS] ASSET_CHECKSUM_FAILURE: ${asset.filename} expected ${asset.checksumSha256}, got $computedAssetSha")
+                    assetPartFile.delete()
+                    partFile.delete()
+                    updateModel(model.id) {
+                        it.copy(
+                            downloadStatus = ModelDownloadStatus.FAILED_VERIFICATION,
+                            errorMessage = "Companion asset ${asset.filename} checksum mismatch.",
+                            downloadSpeed = ""
+                        )
+                    }
+                    return
+                }
+                Log.i(TAG, "[TTS] ASSET_CHECKSUM_SUCCESS: ${asset.filename} verified ($computedAssetSha)")
+            }
         }
 
         // Promote main model file to category folder
@@ -587,60 +606,6 @@ class ModelDownloadManager(
         if (isQueueRunning) {
             processNextInQueue()
         }
-    }
-
-    /**
-     * Checks APK assets for physically bundled model files.
-     * Never generates synthetic dummy bytes. If genuine models are not physically bundled,
-     * requires network download from verified repository.
-     */
-    fun installBundledModel(modelId: String): Boolean {
-        val model = _modelsState.value[modelId] ?: return false
-        val finalFile = storageManager.getModelFile(model)
-
-        // Check if genuine model binary is physically bundled in APK assets
-        return try {
-            val assetPath = "models/${model.localFileName}"
-            val assetList = context.assets.list("models") ?: emptyArray()
-            if (assetList.contains(model.localFileName)) {
-                context.assets.open(assetPath).use { input ->
-                    val tempFile = storageManager.getPartialDownloadFile(model.localFileName)
-                    FileOutputStream(tempFile).use { fos ->
-                        input.copyTo(fos)
-                    }
-                    if (tempFile.length() > 1024 * 1024L) {
-                        storageManager.promoteTempToFinal(model, tempFile)
-                        updateModel(modelId) {
-                            it.copy(
-                                downloadStatus = ModelDownloadStatus.VERIFIED,
-                                downloadProgress = 1.0f,
-                                downloadedBytes = finalFile.length(),
-                                remainingBytes = 0L,
-                                localFilePath = finalFile.absolutePath,
-                                errorMessage = null
-                            )
-                        }
-                        Log.i(TAG, "Bundled APK asset model installed: ${model.name}")
-                        return true
-                    } else {
-                        tempFile.delete()
-                    }
-                }
-            }
-            Log.i(TAG, "No genuine bundled model found in APK assets for $modelId. Network download required.")
-            false
-        } catch (e: Exception) {
-            Log.d(TAG, "No physical asset in APK for $modelId: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Enqueues genuine network downloads for all recommended models (STT, LLM, TTS) sequentially.
-     */
-    fun installAllRecommendedModels(): Boolean {
-        enqueueAllRecommendedModels()
-        return true
     }
 
     private fun updateModel(modelId: String, transform: (ModelItem) -> ModelItem) {

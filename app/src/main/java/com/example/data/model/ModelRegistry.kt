@@ -252,19 +252,22 @@ object ModelRegistry {
                 CompanionAsset(
                     filename = "tokens.txt",
                     downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokens.txt",
-                    fileSizeBytes = 12000L,
+                    fileSizeBytes = 12288L,
+                    checksumSha256 = "4a49c693a4bcbbba7bc930e44ebfef464d271295b998cfb62e49c7198bb6c8a8",
                     isRequired = true
                 ),
                 CompanionAsset(
                     filename = "voices.bin",
                     downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices.bin",
-                    fileSizeBytes = 25000000L,
+                    fileSizeBytes = 24700000L,
+                    checksumSha256 = "361d7b003a2bfbfba5c2aeb38ee7d2ee21ff3c4dc4b85923985fe66bca501d51",
                     isRequired = true
                 ),
                 CompanionAsset(
                     filename = "config.json",
                     downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json",
                     fileSizeBytes = 4096L,
+                    checksumSha256 = "a9e6cf2c786720be7c87c47d76ee1fa6a9643b2f56740ea675cf39f93eeec21b",
                     isRequired = false
                 )
             )

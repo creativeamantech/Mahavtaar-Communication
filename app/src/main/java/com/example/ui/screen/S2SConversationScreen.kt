@@ -314,7 +314,6 @@ fun S2SConversationScreen(
             onCancelDownload = { viewModel.cancelDownload(it) },
             onDeleteModel = { viewModel.deleteModel(it) },
             onDeleteAllModels = { viewModel.deleteAllModels() },
-            onInstallBundledPack = { viewModel.installAllRecommendedModels() },
             onDownloadAllRecommended = { viewModel.downloadAllRecommendedModels() },
             onTestModel = { viewModel.runModelInferenceTest(it) },
             testStatusMessage = uiState.testStatusMessage,
