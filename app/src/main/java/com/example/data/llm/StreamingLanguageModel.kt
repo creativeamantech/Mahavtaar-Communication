@@ -12,8 +12,10 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.isActive
 
 /**
- * Streaming Language Model interface and implementation for real-time speech dialogue.
+ * Legacy prototype for Streaming Language Model.
+ * @deprecated Legacy prototype - DO NOT USE in production pipeline. Production uses NativeLLMRuntime and GgufOnDeviceLLMEngine.
  */
+@Deprecated("Legacy prototype - DO NOT USE in production pipeline. Production uses NativeLLMRuntime and GgufOnDeviceLLMEngine.")
 class StreamingLanguageModel(
     private var backendType: LlmBackendType = LlmBackendType.LOCAL_NEURAL_S2S,
     private var systemPrompt: String = "You are a fast voice assistant. Keep answers brief (1-2 sentences) and natural."

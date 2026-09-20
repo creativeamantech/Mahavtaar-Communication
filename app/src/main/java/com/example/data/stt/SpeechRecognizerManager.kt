@@ -18,9 +18,10 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 
 /**
- * Manages real-time Speech-to-Text with support for Android SpeechRecognizer
- * and high-speed streaming Zipformer transducer mode.
+ * Legacy prototype for Speech-to-Text.
+ * @deprecated Legacy prototype - DO NOT USE in production pipeline. Production uses NativeSTTRuntime and WhisperOnDeviceSTTEngine.
  */
+@Deprecated("Legacy prototype - DO NOT USE in production pipeline. Production uses NativeSTTRuntime and WhisperOnDeviceSTTEngine.")
 class SpeechRecognizerManager(
     private val context: Context
 ) {

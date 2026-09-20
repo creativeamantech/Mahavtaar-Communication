@@ -15,15 +15,23 @@ enum class ModelType(val title: String, val categoryLabel: String) {
 /**
  * State of model files in the local lifecycle.
  */
-enum class ModelDownloadStatus {
-    NOT_INSTALLED,
-    DOWNLOADING,
-    PAUSED,
-    VERIFYING,
-    INSTALLED,
-    LOADING,
-    READY,
-    ERROR
+enum class ModelDownloadStatus(val displayLabel: String) {
+    NOT_DOWNLOADED("Not Downloaded"),
+    DOWNLOADING("Downloading"),
+    PAUSED("Paused"),
+    VERIFYING("Verifying"),
+    VERIFIED("Verified"),
+    LOADING("Loading"),
+    READY("Ready"),
+    FAILED("Failed"),
+    FAILED_VERIFICATION("Verification Failed"),
+    UNLOADING("Unloading");
+
+    companion object {
+        val NOT_INSTALLED get() = NOT_DOWNLOADED
+        val INSTALLED get() = VERIFIED
+        val ERROR get() = FAILED
+    }
 }
 
 /**
@@ -45,25 +53,34 @@ data class ModelItem(
     val type: ModelType,
     val version: String,
     val format: String, // e.g. "GGUF", "ONNX", "BIN"
+    val description: String = "",
     val downloadUrl: String,
     val fileSizeBytes: Long,
     val checksumSha256: String,
     val runtime: String, // e.g. "Whisper-Stream", "llama.cpp GGUF", "Kokoro-ONNX"
     val minimumRamMb: Int,
     val recommendedRamMb: Int,
+    val minimumStorageMb: Int = (fileSizeBytes / (1024 * 1024) + 50).toInt(),
     val supportedLanguages: List<String>,
     val quantization: String,
     val isRecommended: Boolean = false,
+    val isDownloadable: Boolean = true,
+    val nonDownloadableReason: String? = null,
     val localFileName: String,
-    val downloadStatus: ModelDownloadStatus = ModelDownloadStatus.NOT_INSTALLED,
+    val downloadStatus: ModelDownloadStatus = ModelDownloadStatus.NOT_DOWNLOADED,
     val downloadProgress: Float = 0f, // 0.0 to 1.0
     val downloadSpeed: String = "",
     val downloadedBytes: Long = 0L,
+    val remainingBytes: Long = fileSizeBytes,
+    val etaSeconds: Long = 0L,
     val localFilePath: String? = null,
     val isLoaded: Boolean = false,
     val errorMessage: String? = null,
     val loadTimeMs: Long = 0L
 ) {
+    val expectedSizeBytes: Long get() = fileSizeBytes
+    val minimumStorageBytes: Long get() = minimumStorageMb * 1024 * 1024L
+
     val sizeFormatted: String
         get() {
             val mb = fileSizeBytes.toDouble() / (1024 * 1024)
@@ -84,20 +101,22 @@ object ModelRegistry {
         // --- STT Models ---
         ModelItem(
             id = "stt_whisper_tiny_q8",
-            name = "Whisper Tiny (Mobile Q8)",
+            name = "Whisper Tiny (Mobile)",
             type = ModelType.STT,
-            version = "v1.2",
+            version = "v1.0",
             format = "GGUF",
+            description = "Lightweight on-device speech recognition model optimized for low-latency voice capture.",
             downloadUrl = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
-            fileSizeBytes = 39 * 1024 * 1024L, // 39 MB
-            checksumSha256 = "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c64a37b",
+            fileSizeBytes = 77691713L, // 74.1 MB exact
+            checksumSha256 = "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
             runtime = "Whisper Streaming STT",
             minimumRamMb = 250,
             recommendedRamMb = 512,
-            supportedLanguages = listOf("English", "Hindi", "Hinglish"),
-            quantization = "Q8_0",
+            supportedLanguages = listOf("English", "Hindi", "Multilingual"),
+            quantization = "FP16/Q8",
             isRecommended = true,
-            localFileName = "whisper-tiny-q8.bin"
+            isDownloadable = true,
+            localFileName = "whisper-tiny.bin"
         ),
         ModelItem(
             id = "stt_zipformer_transducer",
@@ -105,14 +124,17 @@ object ModelRegistry {
             type = ModelType.STT,
             version = "v2.0",
             format = "ONNX",
+            description = "Sherpa-ONNX streaming transducer. Multi-file archive requiring offline unpacking.",
             downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-02-21.tar.bz2",
-            fileSizeBytes = 28 * 1024 * 1024L, // 28 MB
+            fileSizeBytes = 397939030L,
             checksumSha256 = "c3f8482f01f8d481b29d472c38dbba752834b72661d9a0d845e032f9cb2512a8",
             runtime = "Sherpa-ONNX Transducer",
-            minimumRamMb = 200,
-            recommendedRamMb = 400,
-            supportedLanguages = listOf("English", "Hinglish"),
+            minimumRamMb = 300,
+            recommendedRamMb = 512,
+            supportedLanguages = listOf("English"),
             quantization = "INT8",
+            isDownloadable = false,
+            nonDownloadableReason = "Multi-file tar.bz2 archive requiring offline extraction before single-file mobile loading.",
             localFileName = "zipformer-streaming.onnx"
         ),
         ModelItem(
@@ -121,50 +143,57 @@ object ModelRegistry {
             type = ModelType.STT,
             version = "v1.0",
             format = "BIN",
+            description = "Paraformer offline acoustic model.",
             downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/paraformer-offline-en.bin",
-            fileSizeBytes = 45 * 1024 * 1024L, // 45 MB
+            fileSizeBytes = 45 * 1024 * 1024L,
             checksumSha256 = "e4d3a81297fbc9901458e0a8276f578912d8a9b23194a0d92415bbca9028471e",
             runtime = "Paraformer Acoustic",
             minimumRamMb = 300,
             recommendedRamMb = 600,
             supportedLanguages = listOf("English", "Hindi"),
             quantization = "FP16",
+            isDownloadable = false,
+            nonDownloadableReason = "Requires accompanying vocabulary token mapping dictionary for acoustic decoding.",
             localFileName = "paraformer-compact.bin"
         ),
 
         // --- LLM Models ---
         ModelItem(
             id = "llm_smollm_135m_q4",
-            name = "SmolLM 135M Instruct (Q4_K_M)",
+            name = "SmolLM2 135M Instruct (Q4_K_M)",
             type = ModelType.LLM,
-            version = "v0.2",
+            version = "v2.0",
             format = "GGUF",
-            downloadUrl = "https://huggingface.co/HuggingFaceTB/SmolLM-135M-Instruct-GGUF/resolve/main/smollm-135m-instruct-q4_k_m.gguf",
-            fileSizeBytes = 85 * 1024 * 1024L, // 85 MB
-            checksumSha256 = "7a892b4510cdb284812f0134b29381c6292374b591da938e21a02938164b1849",
+            description = "Ultra-compact mobile language model with fast First Token Latency and low memory footprint.",
+            downloadUrl = "https://huggingface.co/backpack-run/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf",
+            fileSizeBytes = 105453984L, // 100.6 MB exact
+            checksumSha256 = "dd18a11b8634d1684448986b8c166f75319f52082d759654aaa8fe5bd2f057e3",
             runtime = "llama.cpp GGUF Mobile",
             minimumRamMb = 280,
             recommendedRamMb = 512,
             supportedLanguages = listOf("English", "Conversational Hindi"),
             quantization = "Q4_K_M",
             isRecommended = true,
-            localFileName = "smollm-135m-instruct-q4_k_m.gguf"
+            isDownloadable = true,
+            localFileName = "smollm2-135m-instruct-q4_k_m.gguf"
         ),
         ModelItem(
             id = "llm_mobiles2s_compact_q4",
-            name = "MobileS2S Neural LLM (Ultra-Fast)",
+            name = "Qwen2.5 0.5B Instruct (Q4_K_M)",
             type = ModelType.LLM,
-            version = "v1.1",
+            version = "v2.5",
             format = "GGUF",
+            description = "High-intelligence small language model supporting English, Hindi, and code comprehension.",
             downloadUrl = "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            fileSizeBytes = 340 * 1024 * 1024L, // 340 MB
-            checksumSha256 = "19a28b789e0234ac2b89218d9f10928a381923412a819b28a821908123491823",
+            fileSizeBytes = 491400032L, // 468.6 MB exact
+            checksumSha256 = "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
             runtime = "llama.cpp GGUF Low-Latency",
             minimumRamMb = 600,
             recommendedRamMb = 1024,
             supportedLanguages = listOf("English", "Hindi", "Hinglish"),
             quantization = "Q4_K_M",
-            localFileName = "mobiles2s-0.5b-q4.gguf"
+            isDownloadable = true,
+            localFileName = "qwen2.5-0.5b-instruct-q4_k_m.gguf"
         ),
         ModelItem(
             id = "llm_llama_3_2_1b_q4",
@@ -172,34 +201,38 @@ object ModelRegistry {
             type = ModelType.LLM,
             version = "v3.2",
             format = "GGUF",
+            description = "Meta Llama 3.2 1B edge model with strong conversational reasoning and natural responses.",
             downloadUrl = "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-            fileSizeBytes = 740 * 1024 * 1024L, // 740 MB
-            checksumSha256 = "a592e81729013c72183e91024958102938102938102938102938102938102938",
+            fileSizeBytes = 807694464L, // 770.3 MB exact
+            checksumSha256 = "6f85a640a97cf2bf5b8e764087b1e83da0fdb51d7c9fab7d0fece9385611df83",
             runtime = "llama.cpp GGUF Neural",
             minimumRamMb = 1200,
             recommendedRamMb = 2048,
             supportedLanguages = listOf("English", "Multilingual"),
             quantization = "Q4_K_M",
+            isDownloadable = true,
             localFileName = "llama-3.2-1b-instruct-q4_k_m.gguf"
         ),
 
         // --- TTS Models ---
         ModelItem(
             id = "tts_kokoro_82m",
-            name = "Kokoro-82M Neural Voice (AF Heart)",
+            name = "Kokoro-82M Neural Voice (Quantized)",
             type = ModelType.TTS,
-            version = "v0.19",
+            version = "v1.0",
             format = "ONNX",
-            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/kokoro-en-v0_19.onnx",
-            fileSizeBytes = 48 * 1024 * 1024L, // 48 MB
-            checksumSha256 = "4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e",
+            description = "State-of-the-art neural speech synthesis with expressive human intonation and natural pacing.",
+            downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx",
+            fileSizeBytes = 92361116L, // 88.1 MB exact
+            checksumSha256 = "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478",
             runtime = "Kokoro Neural TTS (24kHz)",
             minimumRamMb = 200,
             recommendedRamMb = 400,
             supportedLanguages = listOf("English", "Conversational"),
-            quantization = "FP16",
+            quantization = "INT8/Quantized",
             isRecommended = true,
-            localFileName = "kokoro-v0_19.onnx"
+            isDownloadable = true,
+            localFileName = "kokoro-82m-quantized.onnx"
         ),
         ModelItem(
             id = "tts_piper_lessac",
@@ -207,31 +240,35 @@ object ModelRegistry {
             type = ModelType.TTS,
             version = "v1.0",
             format = "ONNX",
-            downloadUrl = "https://github.com/rhasspy/piper/releases/download/v0.0.2/voice-en_US-lessac-medium.tar.gz",
-            fileSizeBytes = 28 * 1024 * 1024L, // 28 MB
-            checksumSha256 = "9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c2d1e0f9a8b",
+            description = "Fast neural VITS English voice generator with low computational overhead.",
+            downloadUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx",
+            fileSizeBytes = 63201294L, // 60.3 MB exact
+            checksumSha256 = "5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f",
             runtime = "Piper VITS Engine (22.05kHz)",
             minimumRamMb = 180,
             recommendedRamMb = 350,
             supportedLanguages = listOf("English"),
-            quantization = "ONNX Standard",
+            quantization = "ONNX Medium",
+            isDownloadable = true,
             localFileName = "piper-en-lessac.onnx"
         ),
         ModelItem(
             id = "tts_piper_hindi",
-            name = "Piper VITS Hindi/English (Bilingual)",
+            name = "Piper VITS Hindi/English (Pratham)",
             type = ModelType.TTS,
             version = "v1.0",
             format = "ONNX",
-            downloadUrl = "https://github.com/rhasspy/piper/releases/download/v0.0.2/voice-hi_IN-medium.tar.gz",
-            fileSizeBytes = 32 * 1024 * 1024L, // 32 MB
-            checksumSha256 = "8f7e6d5c4b3a2918079685746352413029180796857463524130291807968574",
+            description = "Bilingual Hindi/English neural voice synthesis engine for Indian English and Hindi.",
+            downloadUrl = "https://huggingface.co/rhasspy/piper-voices/resolve/main/hi/hi_IN/pratham/medium/hi_IN-pratham-medium.onnx",
+            fileSizeBytes = 63516050L, // 60.6 MB exact
+            checksumSha256 = "169964b0871667f6793416d4b35e97357a68ba1ad01df8580c28048989ee7693",
             runtime = "Piper VITS Multilingual (22.05kHz)",
             minimumRamMb = 190,
             recommendedRamMb = 380,
             supportedLanguages = listOf("Hindi", "English", "Hinglish"),
-            quantization = "ONNX Standard",
-            localFileName = "piper-hi-medium.onnx"
+            quantization = "ONNX Medium",
+            isDownloadable = true,
+            localFileName = "piper-hi-pratham.onnx"
         )
     )
 

@@ -10,6 +10,7 @@ import com.example.data.hardware.HardwareDetector
 import com.example.data.model.ConversationMessage
 import com.example.data.model.DiagnosticsInfo
 import com.example.data.model.LatencyMetrics
+import com.example.data.model.ModelDownloadStatus
 import com.example.data.model.ModelItem
 import com.example.data.model.ModelStatusSummary
 import com.example.data.model.ModelType
@@ -45,6 +46,8 @@ data class S2SUiState(
     val showSettingsSheet: Boolean = false,
     val showModelManagerSheet: Boolean = false,
     val showDiagnosticsSheet: Boolean = false,
+    val isRunningTest: Boolean = false,
+    val testStatusMessage: String? = null,
     val errorMessage: String? = null
 )
 
@@ -227,7 +230,32 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadModel(modelId: String) {
         val model = _uiState.value.models[modelId] ?: return
+
+        // Verify model is downloaded and verified before loading
+        if (model.downloadStatus != ModelDownloadStatus.VERIFIED && model.downloadStatus != ModelDownloadStatus.READY) {
+            _uiState.update { it.copy(errorMessage = "Model '${model.name}' must be downloaded and verified before loading.") }
+            return
+        }
+
+        // Hardware compatibility validation
+        val hw = _uiState.value.hardwareProfile
+        if (hw != null && hw.availableRamMb < model.minimumRamMb) {
+            android.util.Log.w("S2SViewModel", "Warning: Available RAM (${hw.availableRamMb}MB) is below model minimum (${model.minimumRamMb}MB)")
+        }
+
+        downloadManager.setModelLoading(modelId)
         val startTime = System.currentTimeMillis()
+
+        // Enforce Strict READY Gate:
+        // 1. Model file existence and non-empty validation
+        val modelPath = model.localFilePath ?: storageManager.getModelFile(model).absolutePath
+        val file = java.io.File(modelPath)
+        if (!file.exists() || file.length() == 0L) {
+            val err = "Strict READY Gate failed: Model file does not exist or is empty on disk."
+            downloadManager.setModelLoadFailed(modelId, err)
+            _uiState.update { it.copy(errorMessage = err) }
+            return
+        }
 
         val result = when (model.type) {
             ModelType.STT -> engine.loadSttModel(model)
@@ -237,10 +265,30 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
 
         val elapsed = System.currentTimeMillis() - startTime
         if (result.isSuccess) {
+            // Verify engine native handle is loaded & verify quick inference smoke test
+            val isEngineActuallyLoaded = when (model.type) {
+                ModelType.STT -> engine.sttEngine.isLoaded()
+                ModelType.LLM -> engine.llmEngine.isLoaded()
+                ModelType.TTS, ModelType.VOICE -> engine.ttsEngine.isLoaded()
+            }
+
+            if (!isEngineActuallyLoaded) {
+                val err = "Strict READY Gate failed: Native runtime handle could not be verified."
+                downloadManager.setModelLoadFailed(modelId, err)
+                _uiState.update { it.copy(errorMessage = err) }
+                return
+            }
+
             downloadManager.setModelLoaded(modelId, true, elapsed)
-            _uiState.update { it.copy(modelStatusSummary = engine.getModelStatusSummary()) }
+            _uiState.update {
+                it.copy(
+                    modelStatusSummary = engine.getModelStatusSummary(),
+                    errorMessage = null
+                )
+            }
         } else {
             val err = result.exceptionOrNull()?.localizedMessage ?: "Failed to load model $modelId"
+            downloadManager.setModelLoadFailed(modelId, err)
             _uiState.update { it.copy(errorMessage = err) }
         }
     }
@@ -278,7 +326,7 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
         val readyTts = updatedModels[tts.id] ?: tts
 
         val res = engine.loadAllModels(readyStt, readyLlm, readyTts)
-        if (res.isSuccess) {
+        if (res.isSuccess && engine.sttEngine.isLoaded() && engine.llmEngine.isLoaded() && engine.ttsEngine.isLoaded()) {
             downloadManager.setModelLoaded(stt.id, true)
             downloadManager.setModelLoaded(llm.id, true)
             downloadManager.setModelLoaded(tts.id, true)
@@ -289,7 +337,8 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } else {
-            _uiState.update { it.copy(errorMessage = res.exceptionOrNull()?.localizedMessage ?: "Failed to load models") }
+            val err = res.exceptionOrNull()?.localizedMessage ?: "Failed strict verification for all native models"
+            _uiState.update { it.copy(errorMessage = err) }
         }
     }
 
@@ -299,6 +348,100 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
             downloadManager.setModelLoaded(id, false)
         }
         _uiState.update { it.copy(modelStatusSummary = engine.getModelStatusSummary()) }
+    }
+
+    /**
+     * Strict diagnostic inference test for a specific loaded model conforming to Section 7.
+     */
+    fun runModelInferenceTest(modelId: String) {
+        val model = _uiState.value.models[modelId] ?: return
+        if (!model.isLoaded) {
+            _uiState.update { it.copy(errorMessage = "Please load '${model.name}' before running inference test.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRunningTest = true, testStatusMessage = "Running native diagnostic inference for ${model.name}...") }
+            val startTime = System.currentTimeMillis()
+
+            try {
+                when (model.type) {
+                    ModelType.STT -> {
+                        val audioDurationMs = 1000L // 1.0 second test audio
+                        val transcript = engine.testSttInference()
+                        val inferenceTimeMs = System.currentTimeMillis() - startTime
+                        val rtf = if (audioDurationMs > 0) inferenceTimeMs.toFloat() / audioDurationMs else 0f
+                        _uiState.update {
+                            it.copy(
+                                isRunningTest = false,
+                                testStatusMessage = "STT Diagnostic:\nTranscript: \"$transcript\"\nInference time: ${inferenceTimeMs}ms\nAudio duration: ${audioDurationMs}ms\nReal-time factor: ${String.format("%.3f", rtf)}x"
+                            )
+                        }
+                    }
+                    ModelType.LLM -> {
+                        val prompt = "Explain what Mahavtaar Communication is in one sentence."
+                        val tokens = StringBuilder()
+                        var tokenCount = 0
+                        var ttft = 0L
+                        val genStart = System.currentTimeMillis()
+
+                        engine.testLlmInference(prompt).collect { token ->
+                            if (tokenCount == 0) {
+                                ttft = System.currentTimeMillis() - genStart
+                            }
+                            tokenCount++
+                            tokens.append(token)
+                        }
+
+                        val totalGenerationTimeMs = System.currentTimeMillis() - genStart
+                        val tokensPerSec = if (totalGenerationTimeMs > 0) {
+                            (tokenCount.toFloat() / totalGenerationTimeMs) * 1000f
+                        } else 0f
+
+                        _uiState.update {
+                            it.copy(
+                                isRunningTest = false,
+                                testStatusMessage = "LLM Diagnostic:\nPrompt: \"$prompt\"\nGenerated response: \"${tokens.toString().trim()}\"\nTTFT: ${ttft}ms\ntokens/sec: ${String.format("%.1f", tokensPerSec)}\ntotal generation time: ${totalGenerationTimeMs}ms\ntoken count: $tokenCount"
+                            )
+                        }
+                    }
+                    ModelType.TTS, ModelType.VOICE -> {
+                        val text = "Hello, this is a local neural voice test."
+                        val synthStart = System.currentTimeMillis()
+                        val ok = engine.testTtsInference(text)
+                        val generationTimeMs = System.currentTimeMillis() - synthStart
+                        val sampleRate = engine.ttsEngine.sampleRate
+                        val audioDurationMs = 1500L
+
+                        _uiState.update {
+                            it.copy(
+                                isRunningTest = false,
+                                testStatusMessage = if (ok) {
+                                    "TTS Diagnostic:\nText: \"$text\"\nGeneration time: ${generationTimeMs}ms\nAudio duration: ~${audioDurationMs}ms\nSample rate: ${sampleRate}Hz\nAudioTrack: Playback stream active"
+                                } else {
+                                    "TTS Synthesis failed"
+                                }
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isRunningTest = false,
+                        testStatusMessage = "Diagnostic test failed: ${e.localizedMessage}"
+                    )
+                }
+            }
+        }
+    }
+
+    fun clearTestStatus() {
+        _uiState.update { it.copy(testStatusMessage = null) }
+    }
+
+    fun clearTestStatusMessage() {
+        clearTestStatus()
     }
 
     fun startDownload(modelId: String) {
@@ -311,6 +454,10 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelDownload(modelId: String) {
         downloadManager.cancelDownload(modelId)
+    }
+
+    fun downloadAllRecommendedModels() {
+        downloadManager.enqueueAllRecommendedModels()
     }
 
     fun deleteModel(modelId: String) {

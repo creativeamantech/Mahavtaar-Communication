@@ -314,14 +314,23 @@ fun S2SConversationScreen(
             onCancelDownload = { viewModel.cancelDownload(it) },
             onDeleteModel = { viewModel.deleteModel(it) },
             onDeleteAllModels = { viewModel.deleteAllModels() },
-            onInstallBundledPack = { viewModel.installAllRecommendedModels() }
+            onInstallBundledPack = { viewModel.installAllRecommendedModels() },
+            onDownloadAllRecommended = { viewModel.downloadAllRecommendedModels() },
+            onTestModel = { viewModel.runModelInferenceTest(it) },
+            testStatusMessage = uiState.testStatusMessage,
+            isRunningTest = uiState.isRunningTest,
+            onDismissTestStatus = { viewModel.clearTestStatusMessage() }
         )
     }
 
     if (uiState.showDiagnosticsSheet) {
         DiagnosticsBottomSheet(
             diagnostics = uiState.diagnosticsInfo,
-            onDismiss = { viewModel.closeDiagnostics() }
+            onDismiss = { viewModel.closeDiagnostics() },
+            onRunInferenceTest = { viewModel.runModelInferenceTest(it) },
+            testStatusMessage = uiState.testStatusMessage,
+            isRunningTest = uiState.isRunningTest,
+            onDismissTestStatus = { viewModel.clearTestStatusMessage() }
         )
     }
 }

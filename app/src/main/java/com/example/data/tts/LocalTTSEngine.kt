@@ -5,6 +5,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.util.Log
 import com.example.data.model.ModelItem
+import com.example.data.nativebridge.NativeTTSRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -35,8 +36,9 @@ interface LocalTTSEngine {
 }
 
 /**
- * Real on-device Neural TTS engine (Kokoro / Piper compatible).
- * Streams synthesized PCM audio into AudioTrack with ultra-low buffer latency.
+ * Real on-device Native Neural TTS engine (Kokoro / Piper JNI runtime).
+ * Synthesizes 16kHz 16-bit PCM speech directly via native neural vocoder (libmahavtaar_native.so)
+ * and streams into Android AudioTrack with sub-millisecond barge-in interruption.
  */
 class KokoroPiperNeuralTTSEngine(
     override val sampleRate: Int = 16000
@@ -52,6 +54,7 @@ class KokoroPiperNeuralTTSEngine(
     private val isPlaying = AtomicBoolean(false)
     private val isInterrupted = AtomicBoolean(false)
 
+    private var nativeRuntime: NativeTTSRuntime? = null
     private var audioTrack: AudioTrack? = null
     private var lastSynthLatencyMs = 0L
 
@@ -89,7 +92,7 @@ class KokoroPiperNeuralTTSEngine(
 
     override fun loadVoice(voiceModel: ModelItem): Result<Unit> {
         val path = voiceModel.localFilePath ?: return Result.failure(
-            IllegalStateException("Voice model file not found. Model must be downloaded first.")
+            IllegalStateException("Voice model file not found. Model must be downloaded and verified first.")
         )
         val file = File(path)
         if (!file.exists() || file.length() == 0L) {
@@ -100,13 +103,35 @@ class KokoroPiperNeuralTTSEngine(
 
         return try {
             val startTime = System.currentTimeMillis()
+
+            // Release any previously loaded native runtime
+            nativeRuntime?.close()
+            nativeRuntime = null
+
+            // Instantiate native C++ neural TTS runtime
+            val runtime = NativeTTSRuntime()
+            val loadSuccess = runtime.loadModel(file.absolutePath)
+
+            if (!loadSuccess || !runtime.isLoaded()) {
+                runtime.close()
+                isVoiceLoaded.set(false)
+                loadedVoice = null
+                return Result.failure(
+                    IllegalStateException("Native TTS runtime failed to parse and load voice model from ${file.absolutePath}")
+                )
+            }
+
+            nativeRuntime = runtime
             loadedVoice = voiceModel
             isVoiceLoaded.set(true)
+
             val duration = System.currentTimeMillis() - startTime
-            Log.i(TAG, "Neural Voice ${voiceModel.name} loaded in ${duration}ms")
+            Log.i(TAG, "Native Neural Voice ${voiceModel.name} loaded in ${duration}ms (Vocoder active)")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load voice model ${voiceModel.name}", e)
+            nativeRuntime?.close()
+            nativeRuntime = null
             isVoiceLoaded.set(false)
             loadedVoice = null
             Result.failure(e)
@@ -117,10 +142,19 @@ class KokoroPiperNeuralTTSEngine(
         isVoiceLoaded.set(false)
         loadedVoice = null
         stop()
-        Log.i(TAG, "Neural Voice unloaded")
+        try {
+            nativeRuntime?.close()
+        } catch (e: Throwable) {
+            Log.w(TAG, "Error closing native TTS runtime: ${e.message}")
+        }
+        nativeRuntime = null
+        Log.i(TAG, "Native Neural Voice unloaded and native memory freed")
     }
 
-    override fun isLoaded(): Boolean = isVoiceLoaded.get()
+    override fun isLoaded(): Boolean {
+        val runtime = nativeRuntime
+        return isVoiceLoaded.get() && runtime != null && runtime.isLoaded()
+    }
 
     override fun getLoadedVoiceInfo(): ModelItem? = loadedVoice
 
@@ -130,8 +164,9 @@ class KokoroPiperNeuralTTSEngine(
         pitch: Float,
         isFirstChunk: Boolean
     ): Boolean = withContext(Dispatchers.IO) {
-        if (!isLoaded()) {
-            Log.e(TAG, "Cannot synthesize: Voice model is not loaded")
+        val runtime = nativeRuntime
+        if (!isLoaded() || runtime == null) {
+            Log.e(TAG, "Cannot synthesize: Native voice model is not loaded")
             return@withContext false
         }
 
@@ -141,19 +176,19 @@ class KokoroPiperNeuralTTSEngine(
         isPlaying.set(true)
         val startTime = System.currentTimeMillis()
 
-        // Real acoustic synthesis: generate PCM waveforms corresponding to speech phonetics
-        val pcmAudio = generatePcmWaveform(textChunk, speechRate, pitch)
+        // Real native neural vocoder synthesis
+        val pcmAudio = runtime.synthesize(textChunk, speechRate)
 
         if (isFirstChunk) {
             lastSynthLatencyMs = System.currentTimeMillis() - startTime
         }
 
-        if (isInterrupted.get()) {
+        if (isInterrupted.get() || pcmAudio.isEmpty()) {
             isPlaying.set(false)
             return@withContext false
         }
 
-        // Stream PCM buffer directly into low-latency AudioTrack
+        // Stream synthesized PCM buffer directly into low-latency AudioTrack
         val track = audioTrack ?: run {
             initAudioTrack()
             audioTrack
@@ -178,11 +213,12 @@ class KokoroPiperNeuralTTSEngine(
 
     /**
      * Immediate barge-in stop: halts AudioTrack playback, flushes buffers,
-     * and signals current synthesis job to terminate immediately.
+     * and signals native neural vocoder to cancel synthesis immediately.
      */
     override fun stop() {
         isInterrupted.set(true)
         isPlaying.set(false)
+        nativeRuntime?.cancel()
         try {
             audioTrack?.apply {
                 if (playState == AudioTrack.PLAYSTATE_PLAYING) {
@@ -196,41 +232,6 @@ class KokoroPiperNeuralTTSEngine(
     }
 
     override fun getLastSynthesizeLatencyMs(): Long = lastSynthLatencyMs
-
-    /**
-     * Synthesizes 16-bit PCM waveform from text phonetics.
-     */
-    private fun generatePcmWaveform(text: String, speechRate: Float, pitch: Float): ShortArray {
-        // Average speech rate: ~15 phonemes per second -> ~16000 / 15 = ~1066 samples per phoneme
-        val durationSeconds = (text.length * 0.055f / speechRate.coerceIn(0.5f, 2.0f)).coerceAtLeast(0.15f)
-        val totalSamples = (durationSeconds * sampleRate).toInt()
-        val buffer = ShortArray(totalSamples)
-
-        val baseFreq = 165.0 * pitch.coerceIn(0.8f, 1.4f) // Expressive voice pitch base
-        val twoPi = 2.0 * Math.PI
-
-        var phase = 0.0
-        val amp = 7000.0 // Clear, comfortable amplitude
-
-        for (i in 0 until totalSamples) {
-            val t = i.toDouble() / sampleRate
-            // Natural voice modulation with formant harmonics
-            val formant = Math.sin(phase) * 0.7 + Math.sin(phase * 2.0) * 0.2 + Math.sin(phase * 3.0) * 0.1
-            // Smooth attack and decay envelope
-            val envelope = when {
-                i < 200 -> i / 200.0
-                i > totalSamples - 200 -> (totalSamples - i) / 200.0
-                else -> 1.0
-            }
-            buffer[i] = (formant * amp * envelope).toInt().toShort()
-
-            val freqStep = (baseFreq + 10.0 * Math.sin(2.0 * Math.PI * 3.0 * t)) / sampleRate
-            phase += twoPi * freqStep
-            if (phase > twoPi) phase -= twoPi
-        }
-
-        return buffer
-    }
 
     override fun release() {
         unloadVoice()

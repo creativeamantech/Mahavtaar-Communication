@@ -1,43 +1,142 @@
 package com.example.data.storage
 
 import android.content.Context
-import android.os.Environment
 import android.os.StatFs
 import android.util.Log
 import com.example.data.model.ModelItem
+import com.example.data.model.ModelType
 import java.io.File
 
 /**
- * Manages model storage, disk space validation, and file cleanup for local AI models.
+ * Detailed verdict of storage validation before downloading a model.
+ */
+data class StorageValidationResult(
+    val isAdequate: Boolean,
+    val modelSizeBytes: Long,
+    val safetyMarginBytes: Long,
+    val requiredBytes: Long,
+    val availableBytes: Long,
+    val formattedMessage: String
+)
+
+/**
+ * Manages isolated on-device model directories, disk space validation, and file operations.
+ * Structure:
+ *   /files/models/
+ *     ├── stt/
+ *     ├── llm/
+ *     ├── tts/
+ *     └── temp/
  */
 class StorageManager(private val context: Context) {
 
     companion object {
         private const val TAG = "StorageManager"
-        private const val MODELS_DIR_NAME = "models"
-        private const val SAFETY_MARGIN_BYTES = 50 * 1024 * 1024L // 50 MB buffer
+        const val MODELS_DIR_NAME = "models"
+        const val STT_DIR_NAME = "stt"
+        const val LLM_DIR_NAME = "llm"
+        const val TTS_DIR_NAME = "tts"
+        const val TEMP_DIR_NAME = "temp"
+
+        const val SAFETY_MARGIN_BYTES = 50 * 1024 * 1024L // 50 MB buffer minimum
     }
 
-    private val modelsDir: File
-        get() {
-            val dir = File(context.filesDir, MODELS_DIR_NAME)
-            if (!dir.exists()) {
-                dir.mkdirs()
-            }
-            return dir
+    val modelsDir: File
+        get() = getOrCreateDir(File(context.filesDir, MODELS_DIR_NAME))
+
+    val sttDir: File
+        get() = getOrCreateDir(File(modelsDir, STT_DIR_NAME))
+
+    val llmDir: File
+        get() = getOrCreateDir(File(modelsDir, LLM_DIR_NAME))
+
+    val ttsDir: File
+        get() = getOrCreateDir(File(modelsDir, TTS_DIR_NAME))
+
+    val tempDir: File
+        get() = getOrCreateDir(File(modelsDir, TEMP_DIR_NAME))
+
+    private fun getOrCreateDir(dir: File): File {
+        if (!dir.exists()) {
+            dir.mkdirs()
         }
+        return dir
+    }
 
     fun getModelDirectory(): File = modelsDir
 
-    fun getModelFile(modelFileName: String): File = File(modelsDir, modelFileName)
-
-    fun getPartialDownloadFile(modelFileName: String): File = File(modelsDir, "$modelFileName.part")
+    fun getCategoryDirectory(type: ModelType): File = when (type) {
+        ModelType.STT -> sttDir
+        ModelType.LLM -> llmDir
+        ModelType.TTS, ModelType.VOICE -> ttsDir
+    }
 
     /**
-     * Checks if the model file is present and has non-zero size.
+     * Resolves the primary storage file for a model.
+     * Checks isolated category folder first, then backward-compatible root models folder.
+     */
+    fun getModelFile(model: ModelItem): File {
+        val catDir = getCategoryDirectory(model.type)
+        val isolatedFile = File(catDir, model.localFileName)
+        if (isolatedFile.exists() && isolatedFile.length() > 0L) {
+            return isolatedFile
+        }
+        val legacyFile = File(modelsDir, model.localFileName)
+        if (legacyFile.exists() && legacyFile.length() > 0L) {
+            return legacyFile
+        }
+        return isolatedFile
+    }
+
+    /**
+     * Simple lookup for legacy string file names.
+     */
+    fun getModelFile(modelFileName: String): File {
+        val isolatedStt = File(sttDir, modelFileName)
+        if (isolatedStt.exists()) return isolatedStt
+        val isolatedLlm = File(llmDir, modelFileName)
+        if (isolatedLlm.exists()) return isolatedLlm
+        val isolatedTts = File(ttsDir, modelFileName)
+        if (isolatedTts.exists()) return isolatedTts
+        val legacy = File(modelsDir, modelFileName)
+        if (legacy.exists()) return legacy
+        return File(modelsDir, modelFileName)
+    }
+
+    /**
+     * Partial download file in the isolated temp directory.
+     * Temporary download file name: <model_filename>.download
+     */
+    fun getPartialDownloadFile(modelFileName: String): File {
+        return File(tempDir, "$modelFileName.download")
+    }
+
+    /**
+     * Atomically promotes a verified file from temp directory to the isolated category folder.
+     */
+    fun promoteTempToFinal(model: ModelItem, tempFile: File): File {
+        val targetDir = getCategoryDirectory(model.type)
+        val destinationFile = File(targetDir, model.localFileName)
+
+        if (destinationFile.exists()) {
+            destinationFile.delete()
+        }
+
+        val success = tempFile.renameTo(destinationFile)
+        if (!success) {
+            // Fallback byte copy if atomic rename across filesystems is needed
+            tempFile.copyTo(destinationFile, overwrite = true)
+            tempFile.delete()
+        }
+        Log.i(TAG, "Promoted verified model ${model.name} to ${destinationFile.absolutePath}")
+        return destinationFile
+    }
+
+    /**
+     * Checks if the model file is present in its isolated folder and has non-zero size.
      */
     fun isModelInstalled(model: ModelItem): Boolean {
-        val file = getModelFile(model.localFileName)
+        val file = getModelFile(model)
         return file.exists() && file.length() > 0L
     }
 
@@ -81,15 +180,29 @@ class StorageManager(private val context: Context) {
 
     /**
      * Validates if there is enough free disk space to safely download and install a model.
+     * Calculation: requiredStorage = modelSize + safetyMargin (50MB min)
      */
-    fun validateStorageForDownload(modelSizeBytes: Long): Boolean {
+    fun checkStorage(modelSizeBytes: Long): StorageValidationResult {
         val freeBytes = getAvailableStorageBytes()
         val requiredBytes = modelSizeBytes + SAFETY_MARGIN_BYTES
         val isAdequate = freeBytes >= requiredBytes
-        if (!isAdequate) {
-            Log.w(TAG, "Insufficient storage for model: required=$requiredBytes, available=$freeBytes")
+        val msg = if (isAdequate) {
+            "Storage adequate. Required: ${formatBytes(requiredBytes)}, Available: ${formatBytes(freeBytes)}"
+        } else {
+            "Insufficient storage. Required: ${formatBytes(requiredBytes)}, Available: ${formatBytes(freeBytes)}"
         }
-        return isAdequate
+        return StorageValidationResult(
+            isAdequate = isAdequate,
+            modelSizeBytes = modelSizeBytes,
+            safetyMarginBytes = SAFETY_MARGIN_BYTES,
+            requiredBytes = requiredBytes,
+            availableBytes = freeBytes,
+            formattedMessage = msg
+        )
+    }
+
+    fun validateStorageForDownload(modelSizeBytes: Long): Boolean {
+        return checkStorage(modelSizeBytes).isAdequate
     }
 
     /**
@@ -97,14 +210,19 @@ class StorageManager(private val context: Context) {
      */
     fun deleteModel(model: ModelItem): Boolean {
         return try {
-            val file = getModelFile(model.localFileName)
+            val file = getModelFile(model)
             val partFile = getPartialDownloadFile(model.localFileName)
+            val legacyPart = File(modelsDir, "${model.localFileName}.part")
+
             var deleted = false
             if (file.exists()) {
                 deleted = file.delete()
             }
             if (partFile.exists()) {
                 partFile.delete()
+            }
+            if (legacyPart.exists()) {
+                legacyPart.delete()
             }
             Log.i(TAG, "Deleted model: ${model.name}, success=$deleted")
             true
@@ -115,12 +233,18 @@ class StorageManager(private val context: Context) {
     }
 
     /**
-     * Deletes all files in the models directory.
+     * Deletes all files in the models directory and subdirectories.
      */
     fun deleteAllModels(): Boolean {
         return try {
             if (modelsDir.exists()) {
-                modelsDir.listFiles()?.forEach { it.delete() }
+                modelsDir.listFiles()?.forEach { child ->
+                    if (child.isDirectory) {
+                        child.listFiles()?.forEach { it.delete() }
+                    } else {
+                        child.delete()
+                    }
+                }
             }
             Log.i(TAG, "All models deleted successfully")
             true

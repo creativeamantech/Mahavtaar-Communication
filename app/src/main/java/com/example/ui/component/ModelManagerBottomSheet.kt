@@ -18,21 +18,25 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Assessment
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Divider
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,10 +47,12 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,11 +92,19 @@ fun ModelManagerBottomSheet(
     onCancelDownload: (String) -> Unit,
     onDeleteModel: (String) -> Unit,
     onDeleteAllModels: () -> Unit,
-    onInstallBundledPack: () -> Unit
+    onInstallBundledPack: () -> Unit,
+    onDownloadAllRecommended: () -> Unit = {},
+    onTestModel: (String) -> Unit = {},
+    testStatusMessage: String? = null,
+    isRunningTest: Boolean = false,
+    onDismissTestStatus: () -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     val tabTypes = listOf(ModelType.STT, ModelType.LLM, ModelType.TTS)
+
+    var modelToDelete by remember { mutableStateOf<ModelItem?>(null) }
+    var showDeleteAllConfirm by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -130,12 +144,66 @@ fun ModelManagerBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Test status feedback banner
+            if (testStatusMessage != null) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (isRunningTest) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                    color = S2SElectricMint
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Default.Assessment,
+                                    contentDescription = null,
+                                    tint = S2SElectricMint,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = testStatusMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        IconButton(onClick = onDismissTestStatus) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Dismiss",
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             // Dedicated Model Control Panel
             ModelControlPanelCard(
                 summary = modelStatusSummary,
                 onLoadAll = onLoadAll,
                 onUnloadAll = onUnloadAll,
-                onInstallBundledPack = onInstallBundledPack
+                onInstallBundledPack = onInstallBundledPack,
+                onDownloadAllRecommended = onDownloadAllRecommended
             )
 
             Spacer(modifier = Modifier.height(14.dp))
@@ -145,7 +213,7 @@ fun ModelManagerBottomSheet(
                 usedBytes = storageUsedBytes,
                 availBytes = storageAvailableBytes,
                 hardwareProfile = hardwareProfile,
-                onDeleteAll = onDeleteAllModels
+                onDeleteAll = { showDeleteAllConfirm = true }
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -175,13 +243,67 @@ fun ModelManagerBottomSheet(
                         onDownload = { onStartDownload(model.id) },
                         onPause = { onPauseDownload(model.id) },
                         onCancel = { onCancelDownload(model.id) },
-                        onDelete = { onDeleteModel(model.id) }
+                        onDelete = { modelToDelete = model },
+                        onTest = { onTestModel(model.id) }
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(32.dp))
         }
+    }
+
+    // Confirmation dialog for single model deletion
+    if (modelToDelete != null) {
+        val target = modelToDelete!!
+        AlertDialog(
+            onDismissRequest = { modelToDelete = null },
+            title = { Text("Delete Model") },
+            text = {
+                Text("Delete '${target.name}'? This will unload and remove the verified model file from internal storage.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteModel(target.id)
+                        modelToDelete = null
+                    }
+                ) {
+                    Text("Delete", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { modelToDelete = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Confirmation dialog for deleting all models
+    if (showDeleteAllConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAllConfirm = false },
+            title = { Text("Delete All Models") },
+            text = {
+                Text("Are you sure you want to unload and delete all downloaded models from storage? This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onDeleteAllModels()
+                        showDeleteAllConfirm = false
+                    }
+                ) {
+                    Text("Delete All", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAllConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 
@@ -190,7 +312,8 @@ private fun ModelControlPanelCard(
     summary: ModelStatusSummary,
     onLoadAll: () -> Unit,
     onUnloadAll: () -> Unit,
-    onInstallBundledPack: () -> Unit
+    onInstallBundledPack: () -> Unit,
+    onDownloadAllRecommended: () -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -243,13 +366,28 @@ private fun ModelControlPanelCard(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            OutlinedButton(
-                onClick = onInstallBundledPack,
-                modifier = Modifier.fillMaxWidth().testTag("install_bundled_pack_button")
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("Quick Setup Offline Model Pack", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Button(
+                    onClick = onDownloadAllRecommended,
+                    modifier = Modifier.weight(1f).testTag("download_all_recommended_button"),
+                    colors = ButtonDefaults.buttonColors(containerColor = S2SVioletAccent)
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Download Recommended", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+
+                OutlinedButton(
+                    onClick = onInstallBundledPack,
+                    modifier = Modifier.weight(1f).testTag("install_bundled_pack_button")
+                ) {
+                    Icon(Icons.Default.Speed, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Offline Pack", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }
@@ -326,7 +464,7 @@ private fun StorageSummaryCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Icon(
                     imageVector = Icons.Default.Storage,
                     contentDescription = null,
@@ -336,7 +474,7 @@ private fun StorageSummaryCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Column {
                     Text(
-                        text = "Storage: ${String.format("%.1f MB", usedMb)} used | ${String.format("%.1f GB", availMb / 1024)} free",
+                        text = "Storage: ${String.format("%.1f MB", usedMb)} used | ${String.format("%.1f GB", availMb / 1024)} free (50MB buffer)",
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
                     )
@@ -372,9 +510,12 @@ private fun ModelItemCard(
     onDownload: () -> Unit,
     onPause: () -> Unit,
     onCancel: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTest: () -> Unit = {}
 ) {
-    val isInstalled = model.downloadStatus == ModelDownloadStatus.INSTALLED || model.downloadStatus == ModelDownloadStatus.READY
+    val isVerified = model.downloadStatus == ModelDownloadStatus.VERIFIED ||
+            model.downloadStatus == ModelDownloadStatus.INSTALLED ||
+            model.downloadStatus == ModelDownloadStatus.READY
     val isLoaded = model.isLoaded
 
     Card(
@@ -417,7 +558,7 @@ private fun ModelItemCard(
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Text(
-                        text = "${model.format} • ${model.quantization} • ${model.sizeFormatted} • RAM: ${model.minimumRamMb}MB",
+                        text = "${model.format} • ${model.quantization} • ${model.sizeFormatted} • Min RAM: ${model.minimumRamMb}MB",
                         fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -436,7 +577,7 @@ private fun ModelItemCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            // Progress bar if downloading
+            // Progress bar if downloading or paused
             if (model.downloadStatus == ModelDownloadStatus.DOWNLOADING || model.downloadStatus == ModelDownloadStatus.PAUSED) {
                 Spacer(modifier = Modifier.height(8.dp))
                 LinearProgressIndicator(
@@ -448,22 +589,50 @@ private fun ModelItemCard(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text("${(model.downloadProgress * 100).toInt()}% (${model.downloadSpeed})", fontSize = 11.sp)
+                    val etaStr = if (model.etaSeconds > 0) {
+                        " • ETA: ${model.etaSeconds}s"
+                    } else ""
+                    Text("${(model.downloadProgress * 100).toInt()}% (${model.downloadSpeed}$etaStr)", fontSize = 11.sp)
                     Text(
                         "${model.downloadedBytes / (1024 * 1024)}MB / ${model.fileSizeBytes / (1024 * 1024)}MB",
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
                 }
+            } else if (model.downloadStatus == ModelDownloadStatus.VERIFYING) {
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Verifying SHA-256 cryptographic integrity...",
+                    fontSize = 11.sp,
+                    color = S2SCyanLight,
+                    fontWeight = FontWeight.Medium
+                )
             }
 
-            // Error message
+            // Error message display
             if (model.errorMessage != null) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Error: ${model.errorMessage}",
+                    text = if (model.downloadStatus == ModelDownloadStatus.FAILED_VERIFICATION) {
+                        "SHA-256 integrity mismatch. Binary corrupted or tampered with."
+                    } else {
+                        "Error: ${model.errorMessage}"
+                    },
                     fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Non-downloadable reason if applicable
+            if (!model.isDownloadable && model.downloadStatus == ModelDownloadStatus.NOT_DOWNLOADED) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = model.nonDownloadableReason ?: "Model download URL not available",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -475,15 +644,39 @@ private fun ModelItemCard(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (isInstalled) {
-                    if (isLoaded) {
+                when {
+                    isLoaded -> {
+                        Button(
+                            onClick = onTest,
+                            modifier = Modifier.testTag("test_inference_button_${model.id}"),
+                            colors = ButtonDefaults.buttonColors(containerColor = S2SCyanLight.copy(alpha = 0.25f))
+                        ) {
+                            Text("Test Inference", color = S2SCyanLight, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
                         OutlinedButton(
                             onClick = onUnload,
                             modifier = Modifier.testTag("unload_button_${model.id}")
                         ) {
                             Text("Unload", fontSize = 12.sp)
                         }
-                    } else {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete model", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    model.downloadStatus == ModelDownloadStatus.LOADING -> {
+                        Button(
+                            onClick = {},
+                            enabled = false,
+                            modifier = Modifier.testTag("loading_button_${model.id}")
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Loading...", fontSize = 12.sp)
+                        }
+                    }
+                    isVerified -> {
                         Button(
                             onClick = onLoad,
                             modifier = Modifier.testTag("load_button_${model.id}"),
@@ -491,32 +684,71 @@ private fun ModelItemCard(
                         ) {
                             Text("Load Model", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete model", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = onDelete) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete model", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    model.downloadStatus == ModelDownloadStatus.VERIFYING -> {
+                        Button(
+                            onClick = {},
+                            enabled = false
+                        ) {
+                            Text("Verifying...", fontSize = 12.sp)
+                        }
                     }
-                } else if (model.downloadStatus == ModelDownloadStatus.DOWNLOADING) {
-                    OutlinedButton(onClick = onPause) {
-                        Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Pause", fontSize = 12.sp)
+                    model.downloadStatus == ModelDownloadStatus.DOWNLOADING -> {
+                        OutlinedButton(onClick = onPause) {
+                            Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Pause", fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onCancel) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
+                        }
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(onClick = onCancel) {
-                        Icon(Icons.Default.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
+                    model.downloadStatus == ModelDownloadStatus.PAUSED -> {
+                        Button(onClick = onDownload) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Resume", fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onCancel) {
+                            Icon(Icons.Default.Close, contentDescription = "Cancel", tint = MaterialTheme.colorScheme.error)
+                        }
                     }
-                } else if (model.downloadStatus == ModelDownloadStatus.PAUSED) {
-                    Button(onClick = onDownload) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Resume", fontSize = 12.sp)
+                    model.downloadStatus == ModelDownloadStatus.FAILED ||
+                            model.downloadStatus == ModelDownloadStatus.FAILED_VERIFICATION ||
+                            model.downloadStatus == ModelDownloadStatus.ERROR -> {
+                        Button(onClick = onDownload) {
+                            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Retry", fontSize = 12.sp)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete partial file", tint = MaterialTheme.colorScheme.error)
+                        }
                     }
-                } else {
-                    Button(onClick = onDownload) {
-                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Download", fontSize = 12.sp)
+                    !model.isDownloadable -> {
+                        Button(
+                            onClick = {},
+                            enabled = false
+                        ) {
+                            Text("Not Downloadable", fontSize = 11.sp)
+                        }
+                    }
+                    else -> {
+                        Button(
+                            onClick = onDownload,
+                            modifier = Modifier.testTag("download_button_${model.id}")
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Download", fontSize = 12.sp)
+                        }
                     }
                 }
             }
@@ -528,13 +760,14 @@ private fun ModelItemCard(
 private fun StatusBadge(status: ModelDownloadStatus, isLoaded: Boolean) {
     val (label, color) = when {
         isLoaded -> "READY" to S2SElectricMint
-        status == ModelDownloadStatus.INSTALLED -> "INSTALLED" to S2SCyanLight
+        status == ModelDownloadStatus.VERIFIED || status == ModelDownloadStatus.INSTALLED -> "VERIFIED" to S2SCyanLight
         status == ModelDownloadStatus.DOWNLOADING -> "DOWNLOADING" to S2SVioletAccent
         status == ModelDownloadStatus.PAUSED -> "PAUSED" to Color(0xFFF59E0B)
         status == ModelDownloadStatus.VERIFYING -> "VERIFYING" to S2SCyanLight
         status == ModelDownloadStatus.LOADING -> "LOADING" to S2SCyanLight
-        status == ModelDownloadStatus.ERROR -> "ERROR" to Color(0xFFE53935)
-        else -> "NOT INSTALLED" to Color(0xFF9E9E9E)
+        status == ModelDownloadStatus.FAILED_VERIFICATION -> "CHECKSUM MISMATCH" to Color(0xFFE53935)
+        status == ModelDownloadStatus.FAILED || status == ModelDownloadStatus.ERROR -> "FAILED" to Color(0xFFE53935)
+        else -> "NOT DOWNLOADED" to Color(0xFF9E9E9E)
     }
 
     Box(

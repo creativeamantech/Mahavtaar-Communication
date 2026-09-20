@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Speech to Speech"
+rootProject.name = "Mahavtaar Communication"
 
 include(":app")

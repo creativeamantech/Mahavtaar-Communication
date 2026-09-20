@@ -1,5 +1,5 @@
 {
-  "name": "Speech to Speech",
+  "name": "Mahavtaar Communication",
   "description": "On-device real-time speech-to-speech conversational engine with sub-800ms latency, VAD, STT, streaming LLM, and natural TTS.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

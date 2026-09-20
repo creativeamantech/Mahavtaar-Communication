@@ -3,6 +3,7 @@ package com.example.data.stt
 import android.content.Context
 import android.util.Log
 import com.example.data.model.ModelItem
+import com.example.data.nativebridge.NativeSTTRuntime
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -36,8 +37,9 @@ interface LocalSTTEngine {
 }
 
 /**
- * Real on-device Whisper acoustic processor.
- * Verifies model weights, processes 16kHz PCM frames, and computes transcriptions.
+ * Real on-device Native Neural STT engine (Whisper / Zipformer JNI runtime).
+ * Loads model weights into native C++ runtime (libmahavtaar_native.so),
+ * executes Mel-spectrogram extraction and neural acoustic inference.
  */
 class WhisperOnDeviceSTTEngine : LocalSTTEngine {
 
@@ -50,6 +52,8 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
     private var loadedModel: ModelItem? = null
     private val isModelLoaded = AtomicBoolean(false)
     private val isStreaming = AtomicBoolean(false)
+
+    private var nativeRuntime: NativeSTTRuntime? = null
 
     private val _events = MutableSharedFlow<LocalSttResult>(extraBufferCapacity = 64)
     override val recognitionEvents: Flow<LocalSttResult> = _events.asSharedFlow()
@@ -64,7 +68,7 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
 
     override fun loadModel(model: ModelItem): Result<Unit> {
         val path = model.localFilePath ?: return Result.failure(
-            IllegalStateException("Model file path not found. Model must be downloaded first.")
+            IllegalStateException("Model file path not found. Model must be downloaded and verified first.")
         )
         val file = File(path)
         if (!file.exists() || file.length() == 0L) {
@@ -75,17 +79,35 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
 
         return try {
             val startTime = System.currentTimeMillis()
-            // Validate model header
-            val header = ByteArray(8)
-            file.inputStream().use { it.read(header) }
 
+            // Close existing native runtime if any
+            nativeRuntime?.close()
+            nativeRuntime = null
+
+            // Create and initialize native C++ neural STT runtime
+            val runtime = NativeSTTRuntime()
+            val loadSuccess = runtime.loadModel(file.absolutePath)
+
+            if (!loadSuccess || !runtime.isLoaded()) {
+                runtime.close()
+                isModelLoaded.set(false)
+                loadedModel = null
+                return Result.failure(
+                    IllegalStateException("Native STT runtime failed to parse and initialize model from ${file.absolutePath}")
+                )
+            }
+
+            nativeRuntime = runtime
             loadedModel = model
             isModelLoaded.set(true)
+
             val loadDuration = System.currentTimeMillis() - startTime
-            Log.i(TAG, "STT Model ${model.name} loaded successfully in ${loadDuration}ms")
+            Log.i(TAG, "Native STT Neural Model ${model.name} loaded in ${loadDuration}ms (Native Handle active)")
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load STT model ${model.name}", e)
+            nativeRuntime?.close()
+            nativeRuntime = null
             isModelLoaded.set(false)
             loadedModel = null
             Result.failure(e)
@@ -96,16 +118,25 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
         isModelLoaded.set(false)
         loadedModel = null
         stopStreaming()
-        Log.i(TAG, "STT Model unloaded")
+        try {
+            nativeRuntime?.close()
+        } catch (e: Throwable) {
+            Log.w(TAG, "Error closing native STT runtime: ${e.message}")
+        }
+        nativeRuntime = null
+        Log.i(TAG, "Native STT Model unloaded and native memory freed")
     }
 
-    override fun isLoaded(): Boolean = isModelLoaded.get()
+    override fun isLoaded(): Boolean {
+        val runtime = nativeRuntime
+        return isModelLoaded.get() && runtime != null && runtime.isLoaded()
+    }
 
     override fun getLoadedModelInfo(): ModelItem? = loadedModel
 
     override fun startStreaming() {
         if (!isLoaded()) {
-            _events.tryEmit(LocalSttResult.Error("STT Model is not loaded. Please download & load STT model."))
+            _events.tryEmit(LocalSttResult.Error("STT Neural Model is not loaded. Download & load a verified model first."))
             return
         }
         audioBuffer.clear()
@@ -120,17 +151,14 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
             pcm16.forEach { audioBuffer.add(it) }
         }
 
-        // Calculate acoustic energy
-        var sumSquares = 0.0
-        for (sample in pcm16) {
-            sumSquares += sample * sample
-        }
-        val rms = Math.sqrt(sumSquares / pcm16.size)
-
-        // When sufficient acoustic samples accumulate, emit partial recognition if speech is detected
-        if (audioBuffer.size >= SAMPLE_RATE / 2 && rms > 250.0) { // 500ms of audio
+        // When 500ms of audio has accumulated, perform streaming neural evaluation
+        if (audioBuffer.size >= SAMPLE_RATE / 2) {
+            val audioSnapshot: ShortArray
+            synchronized(audioBuffer) {
+                audioSnapshot = audioBuffer.takeLast(SAMPLE_RATE).toShortArray()
+            }
             val elapsed = System.currentTimeMillis() - streamStartTime
-            val partial = inferAcousticTranscript(audioBuffer.takeLast(SAMPLE_RATE).toShortArray())
+            val partial = runNativeTranscription(audioSnapshot)
             if (partial.isNotBlank()) {
                 _events.tryEmit(LocalSttResult.Partial(partial, elapsed))
             }
@@ -152,56 +180,37 @@ class WhisperOnDeviceSTTEngine : LocalSTTEngine {
             audioBuffer.clear()
         }
 
-        if (fullAudio.size < SAMPLE_RATE / 4) { // less than 250ms
+        if (fullAudio.size < SAMPLE_RATE / 4) { // less than 250ms of audio
             _events.tryEmit(LocalSttResult.Final("", elapsed))
             return
         }
 
-        val finalTranscript = inferAcousticTranscript(fullAudio)
+        val finalTranscript = runNativeTranscription(fullAudio)
         _events.tryEmit(LocalSttResult.Final(finalTranscript, elapsed))
     }
 
     override fun transcribe(audioData: ShortArray): Result<String> {
         if (!isLoaded()) {
-            return Result.failure(IllegalStateException("STT Model is not loaded."))
+            return Result.failure(IllegalStateException("Native STT Neural Model is not loaded."))
         }
-        val text = inferAcousticTranscript(audioData)
+        val text = runNativeTranscription(audioData)
         return Result.success(text)
     }
 
     /**
-     * Real acoustic inference logic operating on 16kHz PCM audio.
+     * Executes real neural transcription by converting PCM to normalized float samples
+     * and passing directly to the native C++ inference engine.
      */
-    private fun inferAcousticTranscript(audio: ShortArray): String {
-        if (audio.isEmpty()) return ""
+    private fun runNativeTranscription(audio: ShortArray): String {
+        val runtime = nativeRuntime ?: return ""
+        if (!runtime.isLoaded() || audio.isEmpty()) return ""
 
-        // Calculate zero-crossing rate and peak spectral distribution
-        var zcr = 0
-        var maxAmp = 0
-        for (i in 0 until audio.size - 1) {
-            if ((audio[i] >= 0 && audio[i + 1] < 0) || (audio[i] < 0 && audio[i + 1] >= 0)) {
-                zcr++
-            }
-            val abs = Math.abs(audio[i].toInt())
-            if (abs > maxAmp) maxAmp = abs
+        val floatPcm = FloatArray(audio.size)
+        for (i in audio.indices) {
+            floatPcm[i] = audio[i] / 32768.0f
         }
 
-        val zcrRate = zcr.toDouble() / audio.size
-        // If energy is below threshold, speech was not discernible
-        if (maxAmp < 300) return ""
-
-        // Process speech features
-        return decodeSpeechAcoustics(zcrRate, maxAmp, audio.size)
-    }
-
-    private fun decodeSpeechAcoustics(zcr: Double, maxAmp: Int, samplesCount: Int): String {
-        val durationSec = samplesCount.toDouble() / SAMPLE_RATE
-        return if (durationSec > 0.5) {
-            // Decoded utterance
-            "Hello, what can you help me with today?"
-        } else {
-            "Yes"
-        }
+        return runtime.transcribe(floatPcm, SAMPLE_RATE)
     }
 
     override fun release() {

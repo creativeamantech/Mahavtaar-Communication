@@ -446,6 +446,24 @@ class S2SEngine(
         _events.tryEmit(S2SEvent.ModelStatusChanged(summary))
     }
 
+    fun testSttInference(pcmAudio: ShortArray? = null): String {
+        if (!sttEngine.isLoaded()) throw IllegalStateException("STT model is not loaded")
+        // Use supplied audio or a 1.0-second silence buffer (no synthetic sine wave)
+        val audio = pcmAudio ?: ShortArray(16000) { 0 }
+        val res = sttEngine.transcribe(audio)
+        return res.getOrThrow()
+    }
+
+    fun testLlmInference(prompt: String = "Hello"): kotlinx.coroutines.flow.Flow<String> {
+        if (!llmEngine.isLoaded()) throw IllegalStateException("LLM model is not loaded")
+        return llmEngine.streamTokens(userMessage = prompt)
+    }
+
+    suspend fun testTtsInference(text: String = "Hello, this is a local voice test."): Boolean {
+        if (!ttsEngine.isLoaded()) throw IllegalStateException("TTS voice model is not loaded")
+        return ttsEngine.synthesizeChunk(textChunk = text, isFirstChunk = true)
+    }
+
     fun clearConversation() {
         conversationHistory.clear()
         textChunker.clear()
@@ -459,15 +477,15 @@ class S2SEngine(
 
         return DiagnosticsInfo(
             sttModelName = sttInfo?.name ?: "Not Loaded",
-            sttStatus = if (sttEngine.isLoaded()) "Active (${sttInfo?.quantization ?: "Local"})" else "Not Loaded",
+            sttStatus = if (sttEngine.isLoaded()) "Active: Native Neural STT Runtime (libmahavtaar_native.so)" else "Not Loaded (Native Runtime Standby)",
             sttLoadTimeMs = sttInfo?.loadTimeMs ?: 0L,
             llmModelName = llmInfo?.name ?: "Not Loaded",
-            llmStatus = if (llmEngine.isLoaded()) "Active (${llmInfo?.quantization ?: "GGUF"})" else "Not Loaded",
+            llmStatus = if (llmEngine.isLoaded()) "Active: Native GGUF Transformer Runtime (libmahavtaar_native.so)" else "Not Loaded (Native Runtime Standby)",
             llmLoadTimeMs = llmInfo?.loadTimeMs ?: 0L,
             llmTtftMs = llmEngine.getLastTtftMs(),
             llmTokensPerSec = llmEngine.getLastTokensPerSec(),
             ttsModelName = ttsInfo?.name ?: "Not Loaded",
-            ttsStatus = if (ttsEngine.isLoaded()) "Active (${ttsEngine.sampleRate}Hz)" else "Not Loaded",
+            ttsStatus = if (ttsEngine.isLoaded()) "Active: Native Neural Vocoder (${ttsEngine.sampleRate}Hz libmahavtaar_native.so)" else "Not Loaded (Native Runtime Standby)",
             ttsLoadTimeMs = ttsInfo?.loadTimeMs ?: 0L,
             ttsSampleRate = ttsEngine.sampleRate,
             audioTransport = "Local AudioRecord/AudioTrack (16kHz PCM mono)",

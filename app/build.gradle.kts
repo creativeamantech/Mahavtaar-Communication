@@ -12,6 +12,7 @@ plugins {
 android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
+  ndkVersion = "26.1.10909125"
 
   defaultConfig {
     applicationId = "com.aistudio.speechtospeech.vrtxzq"
@@ -21,6 +22,23 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+    externalNativeBuild {
+      cmake {
+        cppFlags += listOf("-std=c++17", "-O3", "-fexceptions", "-frtti")
+        abiFilters += listOf("arm64-v8a", "x86_64")
+      }
+    }
+    ndk {
+      abiFilters += listOf("arm64-v8a", "x86_64")
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path = file("src/main/cpp/CMakeLists.txt")
+      version = "3.22.1"
+    }
   }
 
   signingConfigs {
