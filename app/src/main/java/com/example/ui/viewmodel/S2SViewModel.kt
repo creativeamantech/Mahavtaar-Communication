@@ -19,11 +19,13 @@ import com.example.data.model.S2SEvent
 import com.example.data.model.S2SState
 import com.example.data.model.SenderType
 import com.example.data.storage.StorageManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class S2SUiState(
     val engineState: S2SState = S2SState.IDLE,
@@ -430,6 +432,34 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
                     it.copy(
                         isRunningTest = false,
                         testStatusMessage = "Diagnostic test failed: ${e.localizedMessage}"
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Runs comprehensive physical on-device GGUF header, SHA-256, and llama.cpp compatibility check.
+     */
+    fun verifyLlmModelFile(modelId: String = "llm_smollm_135m_q4") {
+        val model = _uiState.value.models[modelId] ?: return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isRunningTest = true, testStatusMessage = "Running native GGUF header & SHA-256 verification for ${model.name}...") }
+            try {
+                val report = withContext(Dispatchers.IO) {
+                    engine.inspectLlmModel(model)
+                }
+                _uiState.update {
+                    it.copy(
+                        isRunningTest = false,
+                        testStatusMessage = "LLM MODEL\n\n$report"
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isRunningTest = false,
+                        testStatusMessage = "LLM Verification Failed: ${e.localizedMessage}"
                     )
                 }
             }

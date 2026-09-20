@@ -133,11 +133,28 @@ class StorageManager(private val context: Context) {
     }
 
     /**
-     * Checks if the model file is present in its isolated folder and has non-zero size.
+     * Checks if the model file (and all companion assets) are present in its isolated folder and have non-zero size.
      */
     fun isModelInstalled(model: ModelItem): Boolean {
         val file = getModelFile(model)
-        return file.exists() && file.length() > 0L
+        if (!file.exists() || file.length() == 0L) {
+            return false
+        }
+
+        // For models with companion assets (e.g. Kokoro TTS), verify companion files exist in same dir
+        if (model.companionAssets.isNotEmpty()) {
+            val parentDir = file.parentFile ?: return false
+            for (asset in model.companionAssets) {
+                if (asset.isRequired) {
+                    val assetFile = File(parentDir, asset.filename)
+                    if (!assetFile.exists() || assetFile.length() == 0L) {
+                        return false
+                    }
+                }
+            }
+        }
+
+        return true
     }
 
     /**

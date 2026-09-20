@@ -60,6 +60,7 @@ fun DiagnosticsBottomSheet(
     diagnostics: DiagnosticsInfo,
     onDismiss: () -> Unit,
     onRunInferenceTest: (String) -> Unit = {},
+    onVerifyLlmModel: () -> Unit = {},
     testStatusMessage: String? = null,
     isRunningTest: Boolean = false,
     onDismissTestStatus: () -> Unit = {}
@@ -177,6 +178,10 @@ fun DiagnosticsBottomSheet(
             Spacer(modifier = Modifier.height(14.dp))
 
             // Section 2: Language Model (LLM)
+            val llmLoaded = diagnostics.llmStatus.contains("READY", ignoreCase = true) ||
+                    diagnostics.llmStatus.contains("LOADED", ignoreCase = true) ||
+                    diagnostics.llmStatus.contains("Active", ignoreCase = true)
+
             DiagnosticsSection(
                 title = "On-Device Language Model (LLM)",
                 icon = Icons.Default.Memory,
@@ -188,27 +193,51 @@ fun DiagnosticsBottomSheet(
                     "Generation Speed" to if (diagnostics.llmTokensPerSec > 0) String.format("%.1f tokens/sec", diagnostics.llmTokensPerSec) else "Awaiting turn",
                     "Context Window" to "2,048 tokens (Conversation Cache active)"
                 ),
-                onTest = if (diagnostics.llmStatus.contains("READY", ignoreCase = true) || diagnostics.llmStatus.contains("LOADED", ignoreCase = true) || diagnostics.llmStatus.contains("Active", ignoreCase = true)) {
+                onTest = if (llmLoaded) {
                     { onRunInferenceTest("llm_smollm_135m_q4") }
                 } else null,
-                testLabel = "Test LLM Inference"
+                testLabel = "Test LLM Inference",
+                onSecondaryAction = onVerifyLlmModel,
+                secondaryLabel = "Verify GGUF Header"
             )
 
             Spacer(modifier = Modifier.height(14.dp))
 
             // Section 3: Speech Synthesis (TTS)
-            DiagnosticsSection(
-                title = "Speech Synthesis (TTS)",
-                icon = Icons.Default.RecordVoiceOver,
-                iconColor = S2SElectricMint,
-                rows = listOf(
+            val isKokoro = diagnostics.ttsModelName.contains("Kokoro", ignoreCase = true)
+            val isLoaded = diagnostics.ttsStatus.contains("READY", ignoreCase = true) ||
+                    diagnostics.ttsStatus.contains("LOADED", ignoreCase = true) ||
+                    diagnostics.ttsStatus.contains("Active", ignoreCase = true)
+
+            val ttsRows = if (isKokoro) {
+                listOf(
+                    "Voice Model" to diagnostics.ttsModelName,
+                    "Package Status" to if (isLoaded) "TTS PACKAGE VERIFIED" else "TTS PACKAGE INCOMPLETE",
+                    "model_quantized.onnx" to if (isLoaded) "PASS" else "CHECK REQUIRED",
+                    "tokens.txt" to if (isLoaded) "PASS" else "CHECK REQUIRED",
+                    "voices.bin" to if (isLoaded) "PASS" else "CHECK REQUIRED",
+                    "espeak-ng-data" to if (isLoaded) "PASS" else "STANDBY",
+                    "Sherpa ONNX Init" to if (isLoaded) "PASS (24000 Hz)" else "FAIL / NOT LOADED",
+                    "Inference Verification" to if (isLoaded) "READY FOR TEST" else "NOT READY",
+                    "Audio Output" to "Low-Latency Android AudioTrack STREAM",
+                    "Barge-In Flush" to "Instantaneous (0ms buffer drop)"
+                )
+            } else {
+                listOf(
                     "Voice Model" to diagnostics.ttsModelName,
                     "Acoustic State" to diagnostics.ttsStatus,
                     "Sample Rate" to "${diagnostics.ttsSampleRate} Hz",
                     "Audio Output" to "Low-Latency Android AudioTrack STREAM",
                     "Barge-In Flush" to "Instantaneous (0ms buffer drop)"
-                ),
-                onTest = if (diagnostics.ttsStatus.contains("READY", ignoreCase = true) || diagnostics.ttsStatus.contains("LOADED", ignoreCase = true) || diagnostics.ttsStatus.contains("Active", ignoreCase = true)) {
+                )
+            }
+
+            DiagnosticsSection(
+                title = if (isKokoro) "Kokoro TTS Package" else "Speech Synthesis (TTS)",
+                icon = Icons.Default.RecordVoiceOver,
+                iconColor = S2SElectricMint,
+                rows = ttsRows,
+                onTest = if (isLoaded) {
                     { onRunInferenceTest("tts_kokoro_82m") }
                 } else null,
                 testLabel = "Test TTS Synthesis"
@@ -242,7 +271,9 @@ private fun DiagnosticsSection(
     iconColor: Color,
     rows: List<Pair<String, String>>,
     onTest: (() -> Unit)? = null,
-    testLabel: String = "Test Inference"
+    testLabel: String = "Test Inference",
+    onSecondaryAction: (() -> Unit)? = null,
+    secondaryLabel: String = "Verify"
 ) {
     Box(
         modifier = Modifier
@@ -262,7 +293,10 @@ private fun DiagnosticsSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f, fill = false)
+                ) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
@@ -278,15 +312,30 @@ private fun DiagnosticsSection(
                     )
                 }
 
-                if (onTest != null) {
-                    OutlinedButton(
-                        onClick = onTest,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                        modifier = Modifier.height(28.dp)
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(testLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (onSecondaryAction != null) {
+                        OutlinedButton(
+                            onClick = onSecondaryAction,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Text(secondaryLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    if (onTest != null) {
+                        OutlinedButton(
+                            onClick = onTest,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(testLabel, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }

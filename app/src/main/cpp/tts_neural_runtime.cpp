@@ -3,10 +3,12 @@
 #include <chrono>
 #include <cstring>
 #include <algorithm>
+#include <unistd.h>
 #include <android/log.h>
 
 #define LOG_TAG "MahavtaarNativeTTS"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 namespace mahavtaar {
@@ -21,7 +23,7 @@ bool TtsNeuralRuntime::loadModel(const std::string& model_path) {
     std::lock_guard<std::mutex> lock(mutex_);
     release();
 
-    LOGI("Loading neural TTS model via sherpa-onnx: %s", model_path.c_str());
+    LOGI("[TTS][PACKAGE_CHECK_START] Checking TTS package at path: %s", model_path.c_str());
 
     std::string base_dir;
     size_t last_slash = model_path.find_last_of("/\\");
@@ -34,6 +36,13 @@ bool TtsNeuralRuntime::loadModel(const std::string& model_path) {
     std::string tokens_path = base_dir + "/tokens.txt";
     std::string data_dir = base_dir + "/espeak-ng-data";
 
+    // Verify model file existence
+    if (access(model_path.c_str(), R_OK) != 0) {
+        LOGE("[TTS][PACKAGE_CHECK_FAILURE] Model file not accessible: %s", model_path.c_str());
+        return false;
+    }
+    LOGI("[TTS][MODEL_FOUND] %s", model_path.c_str());
+
     SherpaOnnxOfflineTtsConfig config;
     memset(&config, 0, sizeof(config));
     config.model.num_threads = 2;
@@ -43,6 +52,27 @@ bool TtsNeuralRuntime::loadModel(const std::string& model_path) {
     bool is_kokoro = (model_path.find("kokoro") != std::string::npos);
     if (is_kokoro) {
         std::string voices_path = base_dir + "/voices.bin";
+
+        if (access(tokens_path.c_str(), R_OK) != 0) {
+            LOGE("[TTS][PACKAGE_CHECK_FAILURE] tokens.txt missing at: %s", tokens_path.c_str());
+            return false;
+        }
+        LOGI("[TTS][TOKENS_FOUND] %s", tokens_path.c_str());
+
+        if (access(voices_path.c_str(), R_OK) != 0) {
+            LOGE("[TTS][PACKAGE_CHECK_FAILURE] voices.bin missing at: %s", voices_path.c_str());
+            return false;
+        }
+        LOGI("[TTS][VOICES_FOUND] %s", voices_path.c_str());
+
+        if (access(data_dir.c_str(), R_OK) != 0) {
+            LOGW("[TTS][ESPEAK_DATA_WARNING] espeak-ng-data directory missing or not readable at: %s", data_dir.c_str());
+        } else {
+            LOGI("[TTS][ESPEAK_DATA_FOUND] %s", data_dir.c_str());
+        }
+
+        LOGI("[TTS][PACKAGE_VERIFIED] Kokoro TTS package files validated successfully in %s", base_dir.c_str());
+
         config.model.kokoro.model = model_path.c_str();
         config.model.kokoro.voices = voices_path.c_str();
         config.model.kokoro.tokens = tokens_path.c_str();
@@ -50,30 +80,39 @@ bool TtsNeuralRuntime::loadModel(const std::string& model_path) {
         config.model.kokoro.length_scale = 1.0f;
     } else {
         // VITS / Piper default
+        if (access(tokens_path.c_str(), R_OK) == 0) {
+            LOGI("[TTS][TOKENS_FOUND] %s", tokens_path.c_str());
+            config.model.vits.tokens = tokens_path.c_str();
+        }
+        if (access(data_dir.c_str(), R_OK) == 0) {
+            LOGI("[TTS][ESPEAK_DATA_FOUND] %s", data_dir.c_str());
+            config.model.vits.data_dir = data_dir.c_str();
+        }
+
         config.model.vits.model = model_path.c_str();
-        config.model.vits.tokens = tokens_path.c_str();
-        config.model.vits.data_dir = data_dir.c_str();
         config.model.vits.length_scale = 1.0f;
         config.model.vits.noise_scale = 0.667f;
         config.model.vits.noise_scale_w = 0.8f;
     }
 
+    LOGI("[TTS][SHERPA_CREATE_START] Invoking SherpaOnnxCreateOfflineTts...");
     tts_ = SherpaOnnxCreateOfflineTts(&config);
     if (!tts_) {
-        LOGE("Failed to create SherpaOnnxOfflineTts from model: %s", model_path.c_str());
+        LOGE("[TTS][SHERPA_CREATE_FAILURE] Failed to create SherpaOnnxOfflineTts from config (model: %s)", model_path.c_str());
         return false;
     }
 
+    LOGI("[TTS][SHERPA_CREATE_SUCCESS] SherpaOnnxOfflineTts initialized successfully!");
     is_loaded_ = true;
     is_cancelled_.store(false);
     model_path_ = model_path;
 
     header_.magic = 0x54545331; // "TTS1"
-    header_.sample_rate = 22050; // standard Piper sample rate
+    header_.sample_rate = is_kokoro ? 24000 : 22050;
     header_.num_channels = 1;
     header_.num_speakers = 1;
 
-    LOGI("Neural TTS model loaded successfully via sherpa-onnx!");
+    LOGI("Neural TTS model loaded successfully via sherpa-onnx (Sample rate: %d Hz)!", header_.sample_rate);
     return true;
 }
 

@@ -92,6 +92,24 @@ class NativeLLMRuntime : Closeable {
         }
     }
 
+    fun getLastError(): String {
+        if (nativeHandle == 0L || !libraryLoaded.get()) return "Native runtime uninitialized"
+        return try {
+            nativeGetLastError(nativeHandle) ?: ""
+        } catch (e: Throwable) {
+            "Error retrieving native error: ${e.message}"
+        }
+    }
+
+    fun inspectModelFile(modelPath: String): String {
+        if (!libraryLoaded.get()) return "Native library not loaded"
+        return try {
+            nativeInspectModel(modelPath) ?: "Empty inspection response"
+        } catch (e: Throwable) {
+            "Inspection error: ${e.message}"
+        }
+    }
+
     override fun close() {
         if (nativeHandle != 0L) {
             try {
@@ -115,5 +133,7 @@ class NativeLLMRuntime : Closeable {
     ): String?
     private external fun nativeCancel(handle: Long)
     private external fun nativeIsLoaded(handle: Long): Boolean
+    private external fun nativeGetLastError(handle: Long): String?
+    private external fun nativeInspectModel(modelPath: String): String?
     private external fun nativeRelease(handle: Long)
 }

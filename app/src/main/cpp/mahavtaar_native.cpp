@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <sstream>
 #include <android/log.h>
 #include "stt_neural_runtime.hpp"
 #include "llm_gguf_runtime.hpp"
@@ -194,6 +195,43 @@ Java_com_example_data_nativebridge_NativeLLMRuntime_nativeIsLoaded(
 ) {
     auto* runtime = reinterpret_cast<LlmGgufRuntime*>(handle);
     return (runtime && runtime->isLoaded()) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_data_nativebridge_NativeLLMRuntime_nativeGetLastError(
+    JNIEnv* env,
+    jobject thiz,
+    jlong handle
+) {
+    auto* runtime = reinterpret_cast<LlmGgufRuntime*>(handle);
+    if (!runtime) return env->NewStringUTF("Runtime handle is null");
+    return env->NewStringUTF(runtime->getLastError().c_str());
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_example_data_nativebridge_NativeLLMRuntime_nativeInspectModel(
+    JNIEnv* env,
+    jobject thiz,
+    jstring model_path
+) {
+    std::string path = jstring2string(env, model_path);
+    auto diag = LlmGgufRuntime::inspectModelFile(path);
+
+    std::ostringstream oss;
+    oss << "File: " << path << "\n"
+        << "Exists: " << (diag.file_exists ? "PASS" : "FAIL") << "\n"
+        << "Size: " << diag.file_size << " bytes\n"
+        << "SHA-256: " << diag.sha256 << "\n"
+        << "GGUF Magic: " << (diag.magic_valid ? "PASS" : "FAIL") << "\n"
+        << "GGUF Version: " << diag.version << "\n"
+        << "Tensor Count: " << diag.tensor_count << "\n"
+        << "Metadata Count: " << diag.metadata_kv_count << "\n"
+        << "Architecture: " << (diag.architecture.empty() ? "N/A" : diag.architecture) << "\n"
+        << "llama.cpp Revision: " << diag.llama_revision << "\n"
+        << "llama_load_model_from_file: " << (diag.llama_load_success ? "PASS" : "FAIL") << "\n"
+        << "Exact Error: " << (diag.exact_error.empty() ? "NONE" : diag.exact_error);
+
+    return env->NewStringUTF(oss.str().c_str());
 }
 
 JNIEXPORT void JNICALL

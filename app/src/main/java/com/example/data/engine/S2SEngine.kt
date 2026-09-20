@@ -459,6 +459,10 @@ class S2SEngine(
         return llmEngine.streamTokens(userMessage = prompt)
     }
 
+    fun inspectLlmModel(model: ModelItem): String {
+        return llmEngine.inspectModel(model)
+    }
+
     suspend fun testTtsInference(text: String = "Hello, this is a local voice test."): Boolean {
         if (!ttsEngine.isLoaded()) throw IllegalStateException("TTS voice model is not loaded")
         return ttsEngine.synthesizeChunk(textChunk = text, isFirstChunk = true)

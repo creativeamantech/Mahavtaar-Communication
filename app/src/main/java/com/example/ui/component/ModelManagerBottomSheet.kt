@@ -577,6 +577,16 @@ private fun ModelItemCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
+            if (model.companionAssets.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Package Assets: ${model.localFileName}, ${model.companionAssets.joinToString(", ") { it.filename }}",
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = S2SCyanLight.copy(alpha = 0.8f)
+                )
+            }
+
             // Progress bar if downloading or paused
             if (model.downloadStatus == ModelDownloadStatus.DOWNLOADING || model.downloadStatus == ModelDownloadStatus.PAUSED) {
                 Spacer(modifier = Modifier.height(8.dp))

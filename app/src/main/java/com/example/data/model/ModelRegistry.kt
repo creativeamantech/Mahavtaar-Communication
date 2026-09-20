@@ -45,6 +45,17 @@ enum class CompatibilityVerdict(val label: String) {
 }
 
 /**
+ * Companion asset required for multi-file model packages (e.g. Kokoro TTS voices.bin, tokens.txt).
+ */
+data class CompanionAsset(
+    val filename: String,
+    val downloadUrl: String,
+    val fileSizeBytes: Long,
+    val checksumSha256: String = "",
+    val isRequired: Boolean = true
+)
+
+/**
  * Detailed descriptor for a locally installable AI model.
  */
 data class ModelItem(
@@ -67,6 +78,7 @@ data class ModelItem(
     val isDownloadable: Boolean = true,
     val nonDownloadableReason: String? = null,
     val localFileName: String,
+    val companionAssets: List<CompanionAsset> = emptyList(),
     val downloadStatus: ModelDownloadStatus = ModelDownloadStatus.NOT_DOWNLOADED,
     val downloadProgress: Float = 0f, // 0.0 to 1.0
     val downloadSpeed: String = "",
@@ -78,12 +90,15 @@ data class ModelItem(
     val errorMessage: String? = null,
     val loadTimeMs: Long = 0L
 ) {
-    val expectedSizeBytes: Long get() = fileSizeBytes
+    val totalPackageSizeBytes: Long
+        get() = fileSizeBytes + companionAssets.sumOf { it.fileSizeBytes }
+
+    val expectedSizeBytes: Long get() = totalPackageSizeBytes
     val minimumStorageBytes: Long get() = minimumStorageMb * 1024 * 1024L
 
     val sizeFormatted: String
         get() {
-            val mb = fileSizeBytes.toDouble() / (1024 * 1024)
+            val mb = totalPackageSizeBytes.toDouble() / (1024 * 1024)
             return if (mb >= 1000) {
                 String.format("%.2f GB", mb / 1024)
             } else {
@@ -217,11 +232,11 @@ object ModelRegistry {
         // --- TTS Models ---
         ModelItem(
             id = "tts_kokoro_82m",
-            name = "Kokoro-82M Neural Voice (Quantized)",
+            name = "Kokoro-82M Neural Voice (Quantized Package)",
             type = ModelType.TTS,
             version = "v1.0",
             format = "ONNX",
-            description = "State-of-the-art neural speech synthesis with expressive human intonation and natural pacing.",
+            description = "State-of-the-art neural speech synthesis package with expressive human intonation, tokens, and multi-speaker voices.",
             downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/onnx/model_quantized.onnx",
             fileSizeBytes = 92361116L, // 88.1 MB exact
             checksumSha256 = "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478",
@@ -232,7 +247,27 @@ object ModelRegistry {
             quantization = "INT8/Quantized",
             isRecommended = true,
             isDownloadable = true,
-            localFileName = "kokoro-82m-quantized.onnx"
+            localFileName = "kokoro-82m-quantized.onnx",
+            companionAssets = listOf(
+                CompanionAsset(
+                    filename = "tokens.txt",
+                    downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/tokens.txt",
+                    fileSizeBytes = 12000L,
+                    isRequired = true
+                ),
+                CompanionAsset(
+                    filename = "voices.bin",
+                    downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices.bin",
+                    fileSizeBytes = 25000000L,
+                    isRequired = true
+                ),
+                CompanionAsset(
+                    filename = "config.json",
+                    downloadUrl = "https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/config.json",
+                    fileSizeBytes = 4096L,
+                    isRequired = false
+                )
+            )
         ),
         ModelItem(
             id = "tts_piper_lessac",

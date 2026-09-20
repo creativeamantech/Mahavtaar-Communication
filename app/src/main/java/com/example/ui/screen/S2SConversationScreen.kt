@@ -328,6 +328,7 @@ fun S2SConversationScreen(
             diagnostics = uiState.diagnosticsInfo,
             onDismiss = { viewModel.closeDiagnostics() },
             onRunInferenceTest = { viewModel.runModelInferenceTest(it) },
+            onVerifyLlmModel = { viewModel.verifyLlmModelFile() },
             testStatusMessage = uiState.testStatusMessage,
             isRunningTest = uiState.isRunningTest,
             onDismissTestStatus = { viewModel.clearTestStatusMessage() }

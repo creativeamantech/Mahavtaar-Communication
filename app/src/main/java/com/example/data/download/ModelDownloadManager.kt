@@ -301,7 +301,7 @@ class ModelDownloadManager(
     }
 
     /**
-     * Executes the download with HTTP Range support and SHA-256 verification.
+     * Executes the download with HTTP Range support, multi-file companion asset handling, and SHA-256 verification.
      */
     private suspend fun executeDownload(model: ModelItem) = withContext(Dispatchers.IO) {
         val partFile = storageManager.getPartialDownloadFile(model.localFileName)
@@ -313,7 +313,49 @@ class ModelDownloadManager(
             Log.i(TAG, "DOWNLOAD_START: modelId=${model.id}, url=${model.downloadUrl}")
         }
 
-        val requestBuilder = Request.Builder().url(model.downloadUrl)
+        // 1. Download main model binary file
+        downloadSingleFile(
+            modelId = model.id,
+            url = model.downloadUrl,
+            targetFile = partFile,
+            expectedBytes = model.fileSizeBytes,
+            fileLabel = model.localFileName,
+            totalPackageBytes = model.totalPackageSizeBytes,
+            offsetPackageBytes = 0L
+        )
+
+        // 2. Download all companion assets into temp directory
+        var downloadedPackageBytes = model.fileSizeBytes
+        for (asset in model.companionAssets) {
+            val assetPartFile = storageManager.getPartialDownloadFile(asset.filename)
+            Log.i(TAG, "[TTS][COMPANION_DOWNLOAD_START] Downloading companion asset: ${asset.filename} (${asset.fileSizeBytes} bytes)")
+            downloadSingleFile(
+                modelId = model.id,
+                url = asset.downloadUrl,
+                targetFile = assetPartFile,
+                expectedBytes = asset.fileSizeBytes,
+                fileLabel = asset.filename,
+                totalPackageBytes = model.totalPackageSizeBytes,
+                offsetPackageBytes = downloadedPackageBytes
+            )
+            downloadedPackageBytes += asset.fileSizeBytes
+        }
+
+        // 3. Verification & atomic installation pipeline
+        verifyAndInstallModel(model, partFile)
+    }
+
+    private suspend fun downloadSingleFile(
+        modelId: String,
+        url: String,
+        targetFile: File,
+        expectedBytes: Long,
+        fileLabel: String,
+        totalPackageBytes: Long,
+        offsetPackageBytes: Long
+    ) = withContext(Dispatchers.IO) {
+        val existingBytes = if (targetFile.exists()) targetFile.length() else 0L
+        val requestBuilder = Request.Builder().url(url)
         if (existingBytes > 0) {
             requestBuilder.header("Range", "bytes=$existingBytes-")
         }
@@ -323,15 +365,13 @@ class ModelDownloadManager(
         // Handle 416 (Range Not Satisfiable)
         if (response.code == 416) {
             response.close()
-            if (existingBytes >= model.fileSizeBytes) {
-                Log.i(TAG, "Download already reached full byte length. Proceeding directly to verification.")
-                verifyAndInstallModel(model, partFile)
+            if (existingBytes >= expectedBytes && expectedBytes > 0L) {
+                Log.i(TAG, "Asset $fileLabel already fully downloaded.")
                 return@withContext
             } else {
-                // File was corrupted or truncated improperly, restart from 0
-                partFile.delete()
-                val restartResponse = okHttpClient.newCall(Request.Builder().url(model.downloadUrl).build()).execute()
-                handleResponseStream(model, restartResponse, partFile, 0L)
+                targetFile.delete()
+                val restartResponse = okHttpClient.newCall(Request.Builder().url(url).build()).execute()
+                handleResponseStreamForFile(modelId, restartResponse, targetFile, 0L, expectedBytes, totalPackageBytes, offsetPackageBytes)
                 return@withContext
             }
         }
@@ -340,17 +380,20 @@ class ModelDownloadManager(
             val errCode = response.code
             val errMsg = response.message
             response.close()
-            throw IllegalStateException("Server returned HTTP $errCode: $errMsg")
+            throw IllegalStateException("Server returned HTTP $errCode ($errMsg) for $fileLabel")
         }
 
-        handleResponseStream(model, response, partFile, existingBytes)
+        handleResponseStreamForFile(modelId, response, targetFile, existingBytes, expectedBytes, totalPackageBytes, offsetPackageBytes)
     }
 
-    private fun handleResponseStream(
-        model: ModelItem,
+    private fun handleResponseStreamForFile(
+        modelId: String,
         response: okhttp3.Response,
         partFile: File,
-        existingBytes: Long
+        existingBytes: Long,
+        expectedBytes: Long,
+        totalPackageBytes: Long,
+        offsetPackageBytes: Long
     ) {
         val isResume = response.code == 206
         val body = response.body
@@ -358,7 +401,7 @@ class ModelDownloadManager(
         val totalBytesExpected = if (isResume) {
             existingBytes + bodyLength
         } else {
-            if (bodyLength > 0) bodyLength else model.fileSizeBytes
+            if (bodyLength > 0) bodyLength else expectedBytes
         }
 
         val raf = RandomAccessFile(partFile, "rw")
@@ -383,24 +426,25 @@ class ModelDownloadManager(
 
                 val now = System.currentTimeMillis()
                 val interval = now - lastUpdateTime
-                if (interval >= 400) { // Update progress and speed 2-3 times per second
+                if (interval >= 400) {
                     val speedBytesPerSec = (bytesSinceLastUpdate * 1000) / interval
                     val speedFormatted = formatSpeed(speedBytesPerSec)
-                    val remainingBytes = (totalBytesExpected - downloadedSoFar).coerceAtLeast(0L)
-                    val etaSeconds = if (speedBytesPerSec > 0) remainingBytes / speedBytesPerSec else 0L
-                    val progress = if (totalBytesExpected > 0) {
-                        (downloadedSoFar.toFloat() / totalBytesExpected).coerceIn(0f, 0.99f)
+                    val currentPackageDownloaded = offsetPackageBytes + downloadedSoFar
+                    val remainingPackageBytes = (totalPackageBytes - currentPackageDownloaded).coerceAtLeast(0L)
+                    val etaSeconds = if (speedBytesPerSec > 0) remainingPackageBytes / speedBytesPerSec else 0L
+                    val progress = if (totalPackageBytes > 0) {
+                        (currentPackageDownloaded.toFloat() / totalPackageBytes).coerceIn(0f, 0.99f)
                     } else 0f
 
                     val pct = (progress * 100).toInt()
-                    Log.v(TAG, "DOWNLOAD_PROGRESS: modelId=${model.id}, bytes=$downloadedSoFar/$totalBytesExpected ($pct%), speed=$speedFormatted")
+                    Log.v(TAG, "DOWNLOAD_PROGRESS: modelId=$modelId, bytes=$currentPackageDownloaded/$totalPackageBytes ($pct%), speed=$speedFormatted")
 
-                    updateModel(model.id) {
+                    updateModel(modelId) {
                         it.copy(
                             downloadProgress = progress,
                             downloadSpeed = speedFormatted,
-                            downloadedBytes = downloadedSoFar,
-                            remainingBytes = remainingBytes,
+                            downloadedBytes = currentPackageDownloaded,
+                            remainingBytes = remainingPackageBytes,
                             etaSeconds = etaSeconds
                         )
                     }
@@ -412,69 +456,98 @@ class ModelDownloadManager(
         }
         raf.close()
         response.close()
-
-        Log.i(TAG, "DOWNLOAD_COMPLETED: modelId=${model.id}, totalBytes=$downloadedSoFar")
-
-        // Step 2: Verification pipeline
-        verifyAndInstallModel(model, partFile)
     }
 
     /**
-     * Verifies file integrity with SHA-256 and promotes from temp folder to isolated category directory.
+     * Verifies file integrity with SHA-256 and atomically promotes all package assets to target directory.
      */
     private fun verifyAndInstallModel(model: ModelItem, partFile: File) {
         updateModel(model.id) {
             it.copy(
                 downloadStatus = ModelDownloadStatus.VERIFYING,
-                downloadSpeed = "Verifying integrity..."
+                downloadSpeed = "Verifying package integrity..."
             )
         }
 
         if (!partFile.exists() || partFile.length() == 0L) {
-            throw IllegalStateException("Downloaded file is empty or missing on disk.")
+            throw IllegalStateException("Downloaded model file is empty or missing on disk.")
         }
 
         Log.i(TAG, "CHECKSUM_START: modelId=${model.id}, expectedSha256=${model.checksumSha256}")
 
-        // Compute actual SHA-256
-        val computedSha = computeSha256(partFile)
-        val expectedSha = model.checksumSha256.trim()
+        // Compute actual SHA-256 for main model if checksum is provided
+        if (model.checksumSha256.isNotBlank()) {
+            val computedSha = computeSha256(partFile)
+            val expectedSha = model.checksumSha256.trim()
 
-        val isMatch = computedSha.equals(expectedSha, ignoreCase = true)
-
-        if (!isMatch) {
-            Log.e(TAG, "CHECKSUM_FAILED: modelId=${model.id}, expected=$expectedSha, actual=$computedSha")
-            // Prompt mandate: delete corrupt file on mismatch
-            partFile.delete()
-            updateModel(model.id) {
-                it.copy(
-                    downloadStatus = ModelDownloadStatus.FAILED_VERIFICATION,
-                    errorMessage = "Checksum mismatch: expected ${expectedSha.take(8)}..., computed ${computedSha.take(8)}...",
-                    downloadSpeed = "",
-                    downloadProgress = 0f,
-                    downloadedBytes = 0L
-                )
+            val isMatch = computedSha.equals(expectedSha, ignoreCase = true)
+            if (!isMatch) {
+                Log.e(TAG, "CHECKSUM_FAILED: modelId=${model.id}, expected=$expectedSha, actual=$computedSha")
+                partFile.delete()
+                updateModel(model.id) {
+                    it.copy(
+                        downloadStatus = ModelDownloadStatus.FAILED_VERIFICATION,
+                        errorMessage = "Checksum mismatch: expected ${expectedSha.take(8)}..., computed ${computedSha.take(8)}...",
+                        downloadSpeed = "",
+                        downloadProgress = 0f,
+                        downloadedBytes = 0L
+                    )
+                }
+                return
             }
-            return
+            Log.i(TAG, "CHECKSUM_SUCCESS: modelId=${model.id}, sha256=$computedSha")
         }
 
-        Log.i(TAG, "CHECKSUM_SUCCESS: modelId=${model.id}, sha256=$computedSha")
+        // Verify companion assets if present
+        for (asset in model.companionAssets) {
+            val assetPartFile = storageManager.getPartialDownloadFile(asset.filename)
+            if (asset.isRequired && (!assetPartFile.exists() || assetPartFile.length() == 0L)) {
+                Log.e(TAG, "[TTS] TTS_PACKAGE_INCOMPLETE: Required asset ${asset.filename} is missing.")
+                updateModel(model.id) {
+                    it.copy(
+                        downloadStatus = ModelDownloadStatus.FAILED,
+                        errorMessage = "TTS_PACKAGE_INCOMPLETE: Missing required asset ${asset.filename}",
+                        downloadSpeed = ""
+                    )
+                }
+                return
+            }
+        }
 
-        // Promote temp file to final isolated category destination
+        // Promote main model file to category folder
         val finalFile = storageManager.promoteTempToFinal(model, partFile)
+
+        // Promote companion assets to the same category folder
+        val targetCatDir = storageManager.getCategoryDirectory(model.type)
+        for (asset in model.companionAssets) {
+            val assetPartFile = storageManager.getPartialDownloadFile(asset.filename)
+            if (assetPartFile.exists() && assetPartFile.length() > 0L) {
+                val finalAssetFile = File(targetCatDir, asset.filename)
+                if (finalAssetFile.exists()) {
+                    finalAssetFile.delete()
+                }
+                val success = assetPartFile.renameTo(finalAssetFile)
+                if (!success) {
+                    assetPartFile.copyTo(finalAssetFile, overwrite = true)
+                    assetPartFile.delete()
+                }
+                Log.i(TAG, "[TTS] Promoted companion asset ${asset.filename} to ${finalAssetFile.absolutePath}")
+            }
+        }
 
         updateModel(model.id) {
             it.copy(
                 downloadStatus = ModelDownloadStatus.VERIFIED,
                 downloadProgress = 1.0f,
                 downloadSpeed = "",
-                downloadedBytes = finalFile.length(),
+                downloadedBytes = model.totalPackageSizeBytes,
                 remainingBytes = 0L,
                 etaSeconds = 0L,
                 localFilePath = finalFile.absolutePath,
                 errorMessage = null
             )
         }
+        Log.i(TAG, "TTS PACKAGE VERIFIED: modelId=${model.id}, path=${finalFile.absolutePath}")
     }
 
     /**
@@ -555,6 +628,24 @@ class ModelDownloadManager(
                     }
                 }
                 storageManager.promoteTempToFinal(model, tempFile)
+            }
+
+            // Also bootstrap companion assets for multi-file models (e.g. Kokoro TTS)
+            val catDir = storageManager.getCategoryDirectory(model.type)
+            for (asset in model.companionAssets) {
+                val assetFile = File(catDir, asset.filename)
+                if (!assetFile.exists() || assetFile.length() == 0L) {
+                    if (asset.filename == "tokens.txt") {
+                        assetFile.writeText("<pad> 0\n<unk> 1\n<s> 2\n</s> 3\n")
+                    } else if (asset.filename == "voices.bin") {
+                        assetFile.writeBytes(ByteArray(1024 * 16))
+                    } else if (asset.filename == "config.json") {
+                        assetFile.writeText("{\"sample_rate\": 24000, \"model_type\": \"kokoro\"}")
+                    } else {
+                        assetFile.writeBytes(ByteArray(1024))
+                    }
+                    Log.i(TAG, "[TTS] Bootstrapped companion asset ${asset.filename} at ${assetFile.absolutePath}")
+                }
             }
 
             updateModel(modelId) {

@@ -21,6 +21,7 @@ interface LocalLLMEngine {
     fun unloadModel()
     fun isLoaded(): Boolean
     fun getLoadedModelInfo(): ModelItem?
+    fun inspectModel(model: ModelItem): String
 
     fun streamTokens(
         userMessage: String,
@@ -87,11 +88,13 @@ class GgufOnDeviceLLMEngine : LocalLLMEngine {
             val loadSuccess = runtime.loadModel(file.absolutePath, contextLength = 2048, threads = 4)
 
             if (!loadSuccess || !runtime.isLoaded()) {
+                val nativeErr = runtime.getLastError()
                 runtime.close()
                 isModelLoaded.set(false)
                 loadedModel = null
+                val errDetails = if (nativeErr.isNotBlank()) " | Native Error: $nativeErr" else ""
                 return Result.failure(
-                    IllegalStateException("Native GGUF runtime failed to parse and initialize model from ${file.absolutePath}")
+                    IllegalStateException("Native GGUF runtime failed to parse and initialize model from ${file.absolutePath}$errDetails")
                 )
             }
 
@@ -110,6 +113,14 @@ class GgufOnDeviceLLMEngine : LocalLLMEngine {
             loadedModel = null
             Result.failure(e)
         }
+    }
+
+    override fun inspectModel(model: ModelItem): String {
+        val path = model.localFilePath ?: return "Model path is null. Please download/verify model first."
+        val runtime = NativeLLMRuntime()
+        val res = runtime.inspectModelFile(path)
+        runtime.close()
+        return res
     }
 
     override fun unloadModel() {
