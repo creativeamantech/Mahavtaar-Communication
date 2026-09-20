@@ -133,7 +133,8 @@ class StorageManager(private val context: Context) {
     }
 
     /**
-     * Checks if the model file (and all companion assets) are present in its isolated folder and have non-zero size.
+     * Checks if the model file (and all companion assets) are present in its isolated folder,
+     * has genuine binary size (not a synthetic dummy/placeholder), and is valid.
      */
     fun isModelInstalled(model: ModelItem): Boolean {
         val file = getModelFile(model)
@@ -141,13 +142,32 @@ class StorageManager(private val context: Context) {
             return false
         }
 
-        // For models with companion assets (e.g. Kokoro TTS), verify companion files exist in same dir
+        // Detect and quarantine/purge old synthetic dummy stubs (e.g. 64KB placeholders)
+        val minExpectedSize = if (model.fileSizeBytes > 0) (model.fileSizeBytes * 0.85).toLong() else 1024 * 1024L
+        if (file.length() < minExpectedSize || file.length() < 1024 * 1024L) {
+            Log.w(TAG, "PURGING_SYNTHETIC_OR_CORRUPT_MODEL: ${file.name} (size=${file.length()}, expected=${model.fileSizeBytes})")
+            file.delete()
+            return false
+        }
+
+        // For models with companion assets (e.g. Kokoro TTS), verify companion files exist with real binary size
         if (model.companionAssets.isNotEmpty()) {
             val parentDir = file.parentFile ?: return false
             for (asset in model.companionAssets) {
                 if (asset.isRequired) {
                     val assetFile = File(parentDir, asset.filename)
                     if (!assetFile.exists() || assetFile.length() == 0L) {
+                        return false
+                    }
+                    // Reject synthetic placeholder companion stubs
+                    if (asset.filename == "voices.bin" && assetFile.length() < 1024 * 1024L) {
+                        Log.w(TAG, "PURGING_SYNTHETIC_ASSET: ${asset.filename} (${assetFile.length()} bytes)")
+                        assetFile.delete()
+                        return false
+                    }
+                    if (asset.filename == "tokens.txt" && assetFile.length() < 500L) {
+                        Log.w(TAG, "PURGING_SYNTHETIC_ASSET: ${asset.filename} (${assetFile.length()} bytes)")
+                        assetFile.delete()
                         return false
                     }
                 }

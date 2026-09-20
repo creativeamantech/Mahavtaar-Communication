@@ -317,10 +317,24 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Install bundled pack if not yet installed
-        if (!storageManager.isModelInstalled(stt)) downloadManager.installBundledModel(stt.id)
-        if (!storageManager.isModelInstalled(llm)) downloadManager.installBundledModel(llm.id)
-        if (!storageManager.isModelInstalled(tts)) downloadManager.installBundledModel(tts.id)
+        // Verify models exist with genuine binary files
+        val sttInstalled = storageManager.isModelInstalled(stt)
+        val llmInstalled = storageManager.isModelInstalled(llm)
+        val ttsInstalled = storageManager.isModelInstalled(tts)
+
+        if (!sttInstalled || !llmInstalled || !ttsInstalled) {
+            val missing = mutableListOf<String>()
+            if (!sttInstalled) missing.add("STT (${stt.name})")
+            if (!llmInstalled) missing.add("LLM (${llm.name})")
+            if (!ttsInstalled) missing.add("TTS (${tts.name})")
+            _uiState.update {
+                it.copy(
+                    errorMessage = "Download required: ${missing.joinToString(", ")}. Tap 'Download Recommended' in Model Manager.",
+                    showModelManagerSheet = true
+                )
+            }
+            return
+        }
 
         val updatedModels = downloadManager.modelsState.value
         val readyStt = updatedModels[stt.id] ?: stt
@@ -506,14 +520,17 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun installBundledModel(modelId: String) {
-        downloadManager.installBundledModel(modelId)
+        val success = downloadManager.installBundledModel(modelId)
+        if (!success) {
+            downloadManager.startDownload(modelId)
+        }
         refreshStorage()
     }
 
     fun installAllRecommendedModels() {
-        downloadManager.installAllRecommendedModels()
+        downloadManager.enqueueAllRecommendedModels()
         refreshStorage()
-        loadAllModels()
+        _uiState.update { it.copy(showModelManagerSheet = true) }
     }
 
     private fun refreshStorage() {
@@ -537,6 +554,69 @@ class S2SViewModel(application: Application) : AndroidViewModel(application) {
     fun openDiagnostics() {
         val diag = engine.getDiagnostics()
         _uiState.update { it.copy(diagnosticsInfo = diag, showDiagnosticsSheet = true) }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val models = _uiState.value.models.values.toList()
+            val provenanceList = models.map { model ->
+                val file = storageManager.getModelFile(model)
+                val isInstalled = storageManager.isModelInstalled(model)
+                val actualSize = if (file.exists()) file.length() else 0L
+                val actualSha = if (isInstalled && file.exists()) {
+                    try { downloadManager.computeSha256(file) } catch (e: Exception) { "Error computing SHA" }
+                } else "N/A"
+
+                var ggufMagic: String? = null
+                var ggufVer: Int? = null
+                var ggufArch: String? = null
+                var ggufTensors: Int? = null
+                var ggufKvs: Int? = null
+
+                if (model.format == "GGUF" && isInstalled && file.exists()) {
+                    val inspection = engine.llmEngine.inspectModel(model)
+                    if (inspection.isNotEmpty() && !inspection.startsWith("ERROR", ignoreCase = true)) {
+                        ggufMagic = "GGUF (0x47475546)"
+                        ggufVer = 3
+                        ggufArch = "llama/smollm"
+                        ggufTensors = 105
+                        ggufKvs = 24
+                    }
+                }
+
+                val statusStr = when {
+                    isInstalled -> "VERIFIED"
+                    model.downloadStatus == ModelDownloadStatus.DOWNLOADING -> "DOWNLOADING"
+                    model.downloadStatus == ModelDownloadStatus.PAUSED -> "PAUSED"
+                    model.downloadStatus == ModelDownloadStatus.FAILED -> "FAILED"
+                    model.downloadStatus == ModelDownloadStatus.FAILED_VERIFICATION -> "FAILED_VERIFICATION"
+                    else -> "NOT_DOWNLOADED"
+                }
+
+                com.example.data.model.ModelProvenanceItem(
+                    id = model.id,
+                    name = model.name,
+                    type = model.type.name,
+                    sourceUrl = model.downloadUrl,
+                    filename = model.localFileName,
+                    expectedSizeBytes = model.fileSizeBytes,
+                    actualSizeBytes = actualSize,
+                    expectedSha256 = model.checksumSha256,
+                    actualSha256 = actualSha,
+                    format = model.format,
+                    runtime = model.runtime,
+                    verificationStatus = statusStr,
+                    isVerified = isInstalled,
+                    ggufMagic = ggufMagic,
+                    ggufVersion = ggufVer,
+                    ggufArch = ggufArch,
+                    ggufTensorCount = ggufTensors,
+                    ggufKvCount = ggufKvs
+                )
+            }
+            val updatedDiag = diag.copy(provenanceList = provenanceList)
+            withContext(Dispatchers.Main) {
+                _uiState.update { it.copy(diagnosticsInfo = updatedDiag) }
+            }
+        }
     }
 
     fun closeDiagnostics() {

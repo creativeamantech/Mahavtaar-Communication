@@ -82,6 +82,30 @@ data class LatencyMetrics(
 }
 
 /**
+ * Model provenance and cryptographic verification descriptor.
+ */
+data class ModelProvenanceItem(
+    val id: String,
+    val name: String,
+    val type: String,
+    val sourceUrl: String,
+    val filename: String,
+    val expectedSizeBytes: Long,
+    val actualSizeBytes: Long,
+    val expectedSha256: String,
+    val actualSha256: String,
+    val format: String,
+    val runtime: String,
+    val verificationStatus: String,
+    val isVerified: Boolean,
+    val ggufMagic: String? = null,
+    val ggufVersion: Int? = null,
+    val ggufArch: String? = null,
+    val ggufTensorCount: Int? = null,
+    val ggufKvCount: Int? = null
+)
+
+/**
  * Diagnostics and runtime telemetry info.
  */
 data class DiagnosticsInfo(
@@ -101,7 +125,8 @@ data class DiagnosticsInfo(
     val totalDeviceRamMb: Int = 0,
     val availDeviceRamMb: Int = 0,
     val cpuArch: String = "arm64-v8a",
-    val availableStorageMb: Int = 0
+    val availableStorageMb: Int = 0,
+    val provenanceList: List<ModelProvenanceItem> = emptyList()
 )
 
 /**

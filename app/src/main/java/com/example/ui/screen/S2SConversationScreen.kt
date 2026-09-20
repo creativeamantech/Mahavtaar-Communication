@@ -223,7 +223,7 @@ fun S2SConversationScreen(
             if (!uiState.modelStatusSummary.allLoaded) {
                 ModelNotLoadedBanner(
                     onOpenModelManager = { viewModel.openModelManager() },
-                    onQuickLoad = { viewModel.installAllRecommendedModels() }
+                    onQuickLoad = { viewModel.loadAllModels() }
                 )
             }
 

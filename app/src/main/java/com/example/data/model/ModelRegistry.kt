@@ -179,10 +179,10 @@ object ModelRegistry {
             type = ModelType.LLM,
             version = "v2.0",
             format = "GGUF",
-            description = "Ultra-compact mobile language model with fast First Token Latency and low memory footprint.",
-            downloadUrl = "https://huggingface.co/backpack-run/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf",
-            fileSizeBytes = 105453984L, // 100.6 MB exact
-            checksumSha256 = "dd18a11b8634d1684448986b8c166f75319f52082d759654aaa8fe5bd2f057e3",
+            description = "Official HuggingFaceTB SmolLM2-135M-Instruct on-device model with ultra-fast TTFT and low memory footprint.",
+            downloadUrl = "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct-GGUF/resolve/main/smollm2-135m-instruct-q4_k_m.gguf",
+            fileSizeBytes = 96654720L, // 92.2 MB exact
+            checksumSha256 = "63b827e85741639c086435d8eefc4a169b5fa088d8b6da44b62d35ebec8c75ff",
             runtime = "llama.cpp GGUF Mobile",
             minimumRamMb = 280,
             recommendedRamMb = 512,

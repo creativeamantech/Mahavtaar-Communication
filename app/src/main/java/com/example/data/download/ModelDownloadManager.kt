@@ -590,92 +590,57 @@ class ModelDownloadManager(
     }
 
     /**
-     * Quick-Bootstrap on-device model file locally with valid container structure
-     * so immediate offline evaluation can proceed without gigabytes of network traffic.
+     * Checks APK assets for physically bundled model files.
+     * Never generates synthetic dummy bytes. If genuine models are not physically bundled,
+     * requires network download from verified repository.
      */
     fun installBundledModel(modelId: String): Boolean {
         val model = _modelsState.value[modelId] ?: return false
         val finalFile = storageManager.getModelFile(model)
 
+        // Check if genuine model binary is physically bundled in APK assets
         return try {
-            if (!finalFile.exists() || finalFile.length() == 0L) {
-                val tempFile = storageManager.getPartialDownloadFile(model.localFileName)
-                FileOutputStream(tempFile).use { fos ->
-                    when (model.format) {
-                        "GGUF" -> {
-                            val ggufHeader = byteArrayOf(
-                                0x47, 0x47, 0x55, 0x46, // "GGUF"
-                                0x03, 0x00, 0x00, 0x00, // Version 3
-                                0x0A, 0x00, 0x00, 0x00, // Tensor count 10
-                                0x08, 0x00, 0x00, 0x00  // Metadata KV count 8
+            val assetPath = "models/${model.localFileName}"
+            val assetList = context.assets.list("models") ?: emptyArray()
+            if (assetList.contains(model.localFileName)) {
+                context.assets.open(assetPath).use { input ->
+                    val tempFile = storageManager.getPartialDownloadFile(model.localFileName)
+                    FileOutputStream(tempFile).use { fos ->
+                        input.copyTo(fos)
+                    }
+                    if (tempFile.length() > 1024 * 1024L) {
+                        storageManager.promoteTempToFinal(model, tempFile)
+                        updateModel(modelId) {
+                            it.copy(
+                                downloadStatus = ModelDownloadStatus.VERIFIED,
+                                downloadProgress = 1.0f,
+                                downloadedBytes = finalFile.length(),
+                                remainingBytes = 0L,
+                                localFilePath = finalFile.absolutePath,
+                                errorMessage = null
                             )
-                            fos.write(ggufHeader)
-                            val padding = ByteArray(1024 * 64)
-                            fos.write(padding)
                         }
-                        "ONNX" -> {
-                            val onnxHeader = byteArrayOf(0x08, 0x07, 0x12, 0x04, 0x4F, 0x4E, 0x4E, 0x58)
-                            fos.write(onnxHeader)
-                            val padding = ByteArray(1024 * 64)
-                            fos.write(padding)
-                        }
-                        else -> {
-                            val binHeader = byteArrayOf(0x53, 0x32, 0x53, 0x4D, 0x01, 0x00, 0x00, 0x00)
-                            fos.write(binHeader)
-                            val padding = ByteArray(1024 * 32)
-                            fos.write(padding)
-                        }
-                    }
-                }
-                storageManager.promoteTempToFinal(model, tempFile)
-            }
-
-            // Also bootstrap companion assets for multi-file models (e.g. Kokoro TTS)
-            val catDir = storageManager.getCategoryDirectory(model.type)
-            for (asset in model.companionAssets) {
-                val assetFile = File(catDir, asset.filename)
-                if (!assetFile.exists() || assetFile.length() == 0L) {
-                    if (asset.filename == "tokens.txt") {
-                        assetFile.writeText("<pad> 0\n<unk> 1\n<s> 2\n</s> 3\n")
-                    } else if (asset.filename == "voices.bin") {
-                        assetFile.writeBytes(ByteArray(1024 * 16))
-                    } else if (asset.filename == "config.json") {
-                        assetFile.writeText("{\"sample_rate\": 24000, \"model_type\": \"kokoro\"}")
+                        Log.i(TAG, "Bundled APK asset model installed: ${model.name}")
+                        return true
                     } else {
-                        assetFile.writeBytes(ByteArray(1024))
+                        tempFile.delete()
                     }
-                    Log.i(TAG, "[TTS] Bootstrapped companion asset ${asset.filename} at ${assetFile.absolutePath}")
                 }
             }
-
-            updateModel(modelId) {
-                it.copy(
-                    downloadStatus = ModelDownloadStatus.VERIFIED,
-                    downloadProgress = 1.0f,
-                    downloadedBytes = finalFile.length(),
-                    remainingBytes = 0L,
-                    localFilePath = finalFile.absolutePath,
-                    errorMessage = null
-                )
-            }
-            Log.i(TAG, "Bundled model verified and installed: ${model.name}")
-            true
+            Log.i(TAG, "No genuine bundled model found in APK assets for $modelId. Network download required.")
+            false
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to install bundled model $modelId", e)
+            Log.d(TAG, "No physical asset in APK for $modelId: ${e.message}")
             false
         }
     }
 
     /**
-     * Installs all recommended models (STT, LLM, TTS) at once for one-tap offline setup.
+     * Enqueues genuine network downloads for all recommended models (STT, LLM, TTS) sequentially.
      */
     fun installAllRecommendedModels(): Boolean {
-        var success = true
-        listOf("stt_whisper_tiny_q8", "llm_smollm_135m_q4", "tts_kokoro_82m").forEach { id ->
-            val res = installBundledModel(id)
-            if (!res) success = false
-        }
-        return success
+        enqueueAllRecommendedModels()
+        return true
     }
 
     private fun updateModel(modelId: String, transform: (ModelItem) -> ModelItem) {

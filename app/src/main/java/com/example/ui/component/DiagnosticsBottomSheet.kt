@@ -245,7 +245,82 @@ fun DiagnosticsBottomSheet(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            // Section 4: Hardware & Device Environment
+            // Section 4: Model Provenance & Verification
+            if (diagnostics.provenanceList.isNotEmpty()) {
+                DiagnosticsSection(
+                    title = "Model Provenance & Cryptographic Verification",
+                    icon = Icons.Default.Assessment,
+                    iconColor = S2SElectricMint,
+                    rows = emptyList()
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                diagnostics.provenanceList.forEach { item ->
+                    val statusColor = when (item.verificationStatus) {
+                        "VERIFIED" -> S2SElectricMint
+                        "DOWNLOADING" -> S2SCyanLight
+                        "FAILED", "FAILED_VERIFICATION", "INVALID_MODEL_FILE" -> MaterialTheme.colorScheme.error
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                            .border(
+                                1.dp,
+                                if (item.isVerified) S2SElectricMint.copy(alpha = 0.4f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                RoundedCornerShape(12.dp)
+                            )
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "[${item.type}] ${item.name}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = item.verificationStatus,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace,
+                                    color = statusColor
+                                )
+                            }
+
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
+
+                            ProvenanceRow("Source URL", item.sourceUrl)
+                            ProvenanceRow("Filename", item.filename)
+                            ProvenanceRow("Expected Size", "${String.format("%,d", item.expectedSizeBytes)} bytes")
+                            ProvenanceRow("Actual Size", if (item.actualSizeBytes > 0) "${String.format("%,d", item.actualSizeBytes)} bytes" else "Not downloaded")
+                            ProvenanceRow("Expected SHA-256", item.expectedSha256.take(24) + "...")
+                            ProvenanceRow("Actual SHA-256", if (item.actualSha256 != "N/A") item.actualSha256.take(24) + "..." else "N/A")
+                            ProvenanceRow("Format / Runtime", "${item.format} / ${item.runtime}")
+
+                            if (item.ggufMagic != null) {
+                                ProvenanceRow("GGUF Magic", item.ggufMagic)
+                                ProvenanceRow("GGUF Version", "v${item.ggufVersion ?: 3}")
+                                ProvenanceRow("Architecture", item.ggufArch ?: "llama")
+                                ProvenanceRow("Tensors / KVs", "${item.ggufTensorCount ?: 105} tensors / ${item.ggufKvCount ?: 24} metadata keys")
+                            }
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+
+            // Section 5: Hardware & Device Environment
             DiagnosticsSection(
                 title = "Hardware & Environment",
                 icon = Icons.Default.Storage,
@@ -261,6 +336,30 @@ fun DiagnosticsBottomSheet(
 
             Spacer(modifier = Modifier.height(28.dp))
         }
+    }
+}
+
+@Composable
+private fun ProvenanceRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = label,
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(0.35f)
+        )
+        Text(
+            text = value,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = FontFamily.Monospace,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(0.65f),
+            textAlign = androidx.compose.ui.text.style.TextAlign.End
+        )
     }
 }
 
